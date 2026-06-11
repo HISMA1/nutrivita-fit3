@@ -1,0 +1,14 @@
+[build]
+  command = "echo 'Build successful'"
+  functions = "netlify/functions"
+  publish = "nutrivita-pwa"
+
+[env]
+  [env.production]
+    [env.production.vars]
+      SUPABASE_URL = "https://iguqozpwupzeenxemcxu.supabase.co"
+
+[[redirects]]
+  from = "/.netlify/functions/:name"
+  to = "/.netlify/functions/:name"
+  status = 200

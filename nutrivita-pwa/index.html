@@ -1,0 +1,1924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+<!-- PWA Meta -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NutrivitaFit">
+<meta name="application-name" content="Nutrivita Fit">
+<meta name="theme-color" content="#F8FAF8">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Netlify Functions for Supabase proxy -->
+  <script>
+    // Call Netlify Functions (backend handles Supabase securely)
+    async function sbReq(endpoint, method = 'GET', body = null) {
+      const url = `/.netlify/functions/${endpoint}`;
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      if (method === 'GET') {
+        const data = await res.json();
+        return Array.isArray(data) ? data : [];
+      }
+      return res.ok;
+    }
+
+    window._sbReady = true;
+
+    // ── Polling leaderboard every 10s ──
+    async function pollLeaderboard() {
+      try {
+        const rows = await sbReq('leaderboard', 'GET');
+        if (!Array.isArray(rows)) return;
+        const users = rows.map(r => ({
+          initials: r.initials, name: r.name, dept: r.dept,
+          pts: r.pts || 0, steps: r.steps || 0, wellness: r.wellness || 0,
+          isYou: !!(window._currentUserName && window._currentUserName === r.name)
+        }));
+        const others = users.filter(u => !u.isYou);
+        try { localStorage.setItem('nv_other_users', JSON.stringify(others)); } catch (e) { }
+        const cnt = document.getElementById('emp-count');
+        if (cnt) cnt.textContent = users.length;
+        if (typeof renderLBWithUsers === 'function')
+          renderLBWithUsers(users, window._currentLBType || 'overall');
+      } catch (e) { console.log('Poll leaderboard error:', e); }
+    }
+
+    // ── Polling messages every 5s ──
+    async function pollMessages() {
+      try {
+        const rows = await sbReq('messages', 'GET');
+        if (!Array.isArray(rows)) return;
+        window._liveMessages = rows.map(r => ({
+          id: r.id, userName: r.user_name, initials: r.initials, text: r.text, ts: r.ts
+        }));
+        if (typeof renderMessages === 'function') renderMessages(window._liveMessages);
+      } catch (e) { console.log('Poll messages error:', e); }
+    }
+
+    window.addEventListener('load', () => {
+      pollLeaderboard();
+      pollMessages();
+      setInterval(pollLeaderboard, 10000);
+      setInterval(pollMessages, 5000);
+    });
+  </script>
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="msapplication-TileColor" content="#16A34A">
+<meta name="msapplication-TileImage" content="icons/icon-144x144.png">
+<meta name="description" content="Employee fitness & wellness tracking with AI coaching and leaderboard">
+
+<!-- Open Graph -->
+<meta property="og:title" content="Nutrivita Fit">
+<meta property="og:description" content="Employee fitness & wellness tracking with AI coaching">
+<meta property="og:type" content="website">
+<meta property="og:image" content="icons/icon-512x512.png">
+
+<!-- Apple Touch Icons -->
+<link rel="apple-touch-icon" href="icons/icon-152x152.png">
+<link rel="apple-touch-icon" sizes="72x72"  href="icons/icon-72x72.png">
+<link rel="apple-touch-icon" sizes="96x96"  href="icons/icon-96x96.png">
+<link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128x128.png">
+<link rel="apple-touch-icon" sizes="144x144" href="icons/icon-144x144.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/icon-152x152.png">
+<link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192x192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512x512.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192x192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512x512.png">
+
+<!-- Manifest -->
+<link rel="manifest" href="manifest.json">
+
+<!-- Fonts & Icons -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<title>Nutrivita Fit</title>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --g1:#16A34A;--bg:#F8FAF8;--surf:#FFFFFF;--surf2:#F1F5F1;
+  --bdr:rgba(0,0,0,0.09);--text:#111827;--muted:#6B7280;
+  --warn:#D97706;--danger:#DC2626;--blue:#2563EB;--purple:#7C3AED;
+  --safe-top:env(safe-area-inset-top,0px);
+  --safe-bot:env(safe-area-inset-bottom,0px);
+}
+html{height:100%;background:#F8FAF8}
+body{
+  min-height:100%;background:var(--bg);color:var(--text);
+  font-family:'Syne',sans-serif;display:flex;justify-content:center;
+  overscroll-behavior:none;
+}
+#app{
+  width:100%;max-width:480px;min-height:100vh;
+  position:relative;overflow:hidden;display:flex;flex-direction:column;
+}
+@media(min-width:500px){
+  #app{border-left:1px solid var(--bdr);border-right:1px solid var(--bdr);box-shadow:0 0 40px rgba(0,0,0,0.06)}
+}
+
+/* ── SCREENS ── */
+.screen{display:none;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+.screen.active{display:flex}
+
+/* ── STATUS BAR ── */
+.sb{
+  display:flex;justify-content:space-between;align-items:center;
+  padding-top:calc(10px + var(--safe-top));
+  padding-left:20px;padding-right:20px;padding-bottom:4px;
+  font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;flex-shrink:0;
+}
+
+/* ── HEADER ── */
+.hdr{padding:8px 20px 6px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:8px}
+.logo-mark{width:30px;height:30px;border-radius:9px;background:var(--g1);display:flex;align-items:center;justify-content:center}
+.logo-mark i{font-size:17px;color:#fff}
+.logo-text{font-size:17px;font-weight:800;letter-spacing:-.5px}
+.logo-text span{color:var(--g1)}
+.av{width:36px;height:36px;border-radius:50%;background:var(--g1);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;cursor:pointer;flex-shrink:0}
+
+/* ── BOTTOM NAV ── */
+.bnav{
+  display:flex;background:var(--surf);
+  border-top:.5px solid var(--bdr);box-shadow:0 -4px 16px rgba(0,0,0,0.06);
+  padding:8px 0 calc(8px + var(--safe-bot));
+  flex-shrink:0;
+}
+.ni{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:3px 0;color:var(--muted);font-size:9px;user-select:none;transition:color .15s}
+.ni i{font-size:21px}
+.ni.on{color:var(--g1)}
+
+/* ── SCROLL BODY ── */
+.sb2{flex:1;overflow-y:auto;padding:0 18px 16px;-webkit-overflow-scrolling:touch}
+.sb2::-webkit-scrollbar{display:none}
+
+/* ── CARDS ── */
+.card{background:var(--surf);border-radius:14px;border:.5px solid var(--bdr);padding:14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.mg{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-bottom:10px}
+.mc{background:var(--surf);border-radius:13px;border:.5px solid var(--bdr);padding:13px;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.ml{font-size:10px;color:var(--muted);margin-bottom:3px}
+.mv{font-size:22px;font-weight:700;line-height:1}
+.mu{font-size:10px;color:var(--muted);margin-left:2px;font-weight:400}
+.ms{font-size:10px;margin-top:3px}
+
+/* ── SECTION HEAD ── */
+.sh{display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px}
+.sh h3{font-size:14px;font-weight:700}
+
+/* ── TAGS ── */
+.tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600}
+.tg{background:rgba(22,163,74,.12);color:#15803D}
+.tb{background:rgba(37,99,235,.12);color:#1D4ED8}
+.tp{background:rgba(124,58,237,.12);color:#6D28D9}
+.tw{background:rgba(217,119,6,.12);color:#B45309}
+
+/* ── ACTIVITY ROW ── */
+.air{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:.5px solid var(--bdr)}
+.air:last-child{border-bottom:none}
+.aic{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0}
+
+/* ── CHIP ── */
+.chip{padding:7px 13px;border-radius:20px;font-size:11px;font-weight:600;border:.5px solid var(--bdr);background:var(--surf2);cursor:pointer;transition:all .15s;user-select:none;color:var(--text)}
+.chip.on{background:var(--g1);color:#fff;border-color:var(--g1)}
+
+/* ── LIVE BADGE ── */
+.liveb{display:inline-flex;align-items:center;gap:5px;background:rgba(248,113,113,.12);border:.5px solid rgba(248,113,113,.35);border-radius:20px;padding:4px 10px;font-size:10px;color:var(--danger);font-weight:600}
+.ld{width:6px;height:6px;border-radius:50%;background:var(--danger);animation:pp 1.2s infinite}
+@keyframes pp{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes heartbeat{0%,100%{transform:scale(1)}15%{transform:scale(1.35)}30%{transform:scale(1)}45%{transform:scale(1.2)}60%{transform:scale(1)}}
+.ppg-pulse{animation:heartbeat 0.6s ease-out;}
+
+/* ── PROGRESS BAR ── */
+.pbr{height:5px;background:var(--surf2);border-radius:3px;overflow:hidden}
+.pbf{height:100%;border-radius:3px;background:var(--g1);transition:width .6s ease}
+
+/* ── TRACK BUTTON ── */
+.trkbtn{width:100%;padding:16px;border-radius:13px;border:none;font-family:'Syne',sans-serif;font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:transform .15s}
+.trkbtn:active{transform:scale(.97)}
+.trkbtn.start{background:var(--g1);color:#fff}
+.trkbtn.stop{background:var(--danger);color:#fff}
+
+/* ── LIVE STATS ── */
+.lsg{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}
+.lsv{text-align:center}
+.lsv .v{font-size:22px;font-weight:700;font-family:'DM Mono',monospace}
+.lsv .l{font-size:9px;color:var(--muted);margin-top:3px}
+
+/* ── WELLNESS CARD ── */
+.wcard{background:var(--surf);border-radius:14px;border:.5px solid var(--bdr);padding:14px;margin-bottom:10px;cursor:pointer;transition:border-color .2s}
+.wcard:active{border-color:rgba(29,185,84,.5);transform:scale(.99)}
+.wci{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.wico{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.diff{display:inline-block;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600}
+.de{background:rgba(22,163,74,.12);color:#15803D}
+.dm{background:rgba(217,119,6,.12);color:#B45309}
+
+/* ── LEADERBOARD ── */
+.lbi{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:.5px solid var(--bdr)}
+.lbi:last-child{border-bottom:none}
+.lbr{font-size:12px;font-weight:700;width:20px;text-align:center;font-family:'DM Mono',monospace;flex-shrink:0}
+.lbav{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.lbpts{font-size:13px;font-weight:700;font-family:'DM Mono',monospace;color:var(--g1)}
+.lb-tab{padding:7px 14px;border-radius:20px;font-size:11px;font-weight:600;border:.5px solid var(--bdr);background:var(--surf2);cursor:pointer;transition:all .15s;color:var(--text)}
+.lb-tab.on{background:var(--g1);color:#fff;border-color:var(--g1)}
+
+/* ── CHAT ── */
+.msg{max-width:86%;padding:10px 13px;border-radius:14px;font-size:13px;line-height:1.55}
+.msg.ai{background:var(--surf2);border-radius:14px 14px 14px 4px;align-self:flex-start}
+.msg.u{background:var(--g1);color:#fff;border-radius:14px 14px 4px 14px;align-self:flex-end;font-weight:600}
+.dots span{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--muted);margin:0 2px;animation:bn 1.2s infinite}
+.dots span:nth-child(2){animation-delay:.15s}
+.dots span:nth-child(3){animation-delay:.3s}
+@keyframes bn{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-5px)}}
+.ci{flex:1;background:var(--surf2);border:.5px solid var(--bdr);border-radius:12px;padding:10px 14px;font-family:'Syne',sans-serif;font-size:13px;color:var(--text);resize:none;outline:none;line-height:1.4}
+.ci::placeholder{color:var(--muted)}
+.ci:focus{border-color:rgba(29,185,84,.4)}
+.sb3{width:40px;height:40px;border-radius:11px;background:var(--g1);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform .15s}
+.sb3:active{transform:scale(.92)}
+
+/* ── TOGGLE ── */
+.tog{width:40px;height:22px;border-radius:11px;background:var(--g1);position:relative;cursor:pointer;flex-shrink:0;transition:background .2s}
+.tog.off{background:var(--surf2)}
+.tog::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;right:3px;transition:all .2s}
+.tog.off::after{left:3px;right:auto}
+.togr{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:.5px solid var(--bdr)}
+.togr:last-child{border-bottom:none}
+
+/* ── FORM ── */
+input[type=text]{background:var(--surf2);border:.5px solid var(--bdr);border-radius:10px;padding:11px 14px;font-family:'Syne',sans-serif;font-size:13px;color:var(--text);outline:none;width:100%;transition:border-color .2s}
+input[type=text]:focus{border-color:rgba(29,185,84,.5)}
+input[type=text]::placeholder{color:var(--muted)}
+.btn-pr{background:var(--g1);color:#fff;border:none;border-radius:11px;padding:13px 20px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;width:100%;transition:transform .15s}
+.btn-pr:active{transform:scale(.97)}
+
+/* ── BADGES ── */
+.jbadge{display:inline-flex;align-items:center;gap:5px;background:rgba(29,185,84,.12);border:.5px solid rgba(29,185,84,.35);border-radius:20px;padding:4px 10px;font-size:11px;color:var(--g1);font-weight:600}
+.jdot{width:6px;height:6px;border-radius:50%;background:var(--g1)}
+
+/* ── BAR CHART ── */
+.barchart{display:flex;align-items:flex-end;gap:5px;height:65px;padding-top:6px}
+.bc{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.bb{width:100%;border-radius:3px 3px 0 0;background:var(--g1);opacity:.55}
+.bb.t{opacity:1}
+.bl{font-size:9px;color:var(--muted);font-family:'DM Mono',monospace}
+
+/* ── RINGS ── */
+.ring-wrap{display:flex;justify-content:center;align-items:center;padding:12px 0 6px;gap:16px}
+.rleg{display:flex;flex-direction:column;gap:9px}
+.rrow{display:flex;align-items:center;gap:7px}
+.rdot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* ── INSTALL BANNER ── */
+#install-banner{
+  display:none;position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:100%;max-width:480px;background:var(--surf);
+  border-top:.5px solid rgba(29,185,84,.3);
+  padding:14px 20px calc(14px + var(--safe-bot));
+  z-index:999;
+}
+#install-banner.show{display:flex;align-items:center;gap:12px}
+#install-banner .ib-icon{width:40px;height:40px;border-radius:10px;background:var(--g1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+#install-banner .ib-text{flex:1}
+#install-banner .ib-title{font-size:13px;font-weight:700}
+#install-banner .ib-sub{font-size:11px;color:var(--muted);margin-top:1px}
+#install-banner .ib-btn{background:var(--g1);color:#fff;border:none;border-radius:9px;padding:9px 16px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+#install-banner .ib-close{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:4px;flex-shrink:0}
+
+/* ── OFFLINE TOAST ── */
+#offline-toast{display:none;position:fixed;top:calc(16px + var(--safe-top));left:50%;transform:translateX(-50%);background:#1a1a1a;color:var(--text);padding:10px 18px;border-radius:20px;font-size:12px;font-weight:600;z-index:1000;border:.5px solid var(--bdr);white-space:nowrap}
+#offline-toast.show{display:block}
+
+/* ── PODIUM ── */
+.pod-bar{border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:'DM Mono',monospace}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- OFFLINE TOAST -->
+  <div id="offline-toast">📵 You're offline — app works in cached mode</div>
+
+  <!-- INSTALL BANNER -->
+  <div id="install-banner">
+    <div class="ib-icon"><i class="ti ti-leaf" style="font-size:20px;color:#fff"></i></div>
+    <div class="ib-text">
+      <div class="ib-title">Add Nutrivita Fit</div>
+      <div class="ib-sub">Install app for best experience</div>
+    </div>
+    <button class="ib-btn" id="install-btn">Install</button>
+    <button class="ib-close" id="install-close">&times;</button>
+  </div>
+
+  <!-- ═══════════ HOME ═══════════ -->
+  <div class="screen active" id="s-home">
+    <div class="sb"><span id="clk">9:41</span><span style="display:flex;gap:5px;align-items:center"><i class="ti ti-wifi" style="font-size:13px"></i><i class="ti ti-battery-3" style="font-size:13px"></i></span></div>
+    <div class="hdr">
+      <div class="logo"><div class="logo-mark"><i class="ti ti-leaf"></i></div><div class="logo-text">Nutri<span>vita</span> Fit</div></div>
+      <div class="av" onclick="go('profile')" title="Profile" id="home-av">?</div>
+    </div>
+    <div class="sb2">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px" id="date-lbl"></div>
+
+      <div class="ring-wrap">
+        <svg width="148" height="148" viewBox="0 0 148 148" aria-label="Activity rings">
+          <circle cx="74" cy="74" r="60" fill="none" stroke="var(--surf2)" stroke-width="11"/>
+          <circle cx="74" cy="74" r="60" fill="none" stroke="#1DB954" stroke-width="11" stroke-linecap="round" stroke-dasharray="376.99" stroke-dashoffset="376.99" transform="rotate(-90 74 74)" id="ring-move"/>
+          <circle cx="74" cy="74" r="45" fill="none" stroke="var(--surf2)" stroke-width="9"/>
+          <circle cx="74" cy="74" r="45" fill="none" stroke="#60A5FA" stroke-width="9" stroke-linecap="round" stroke-dasharray="282.74" stroke-dashoffset="282.74" transform="rotate(-90 74 74)" id="ring-exercise"/>
+          <circle cx="74" cy="74" r="31" fill="none" stroke="var(--surf2)" stroke-width="7"/>
+          <circle cx="74" cy="74" r="31" fill="none" stroke="#A78BFA" stroke-width="7" stroke-linecap="round" stroke-dasharray="194.78" stroke-dashoffset="194.78" transform="rotate(-90 74 74)" id="ring-stand"/>
+          <text x="74" y="69" text-anchor="middle" fill="#111827" font-size="19" font-weight="700" font-family="Syne,sans-serif" id="ring-steps">0</text>
+          <text x="74" y="84" text-anchor="middle" fill="#6B7280" font-size="10" font-family="Syne,sans-serif">steps today</text>
+        </svg>
+        <div class="rleg">
+          <div class="rrow"><div class="rdot" style="background:#1DB954"></div><div><div style="font-size:12px;font-weight:600">Move</div><div style="font-size:10px;color:var(--muted)" id="stat-move">0 / 600 kcal</div></div></div>
+          <div class="rrow"><div class="rdot" style="background:#60A5FA"></div><div><div style="font-size:12px;font-weight:600">Exercise</div><div style="font-size:10px;color:var(--muted)" id="stat-exercise">0 / 30 min</div></div></div>
+          <div class="rrow"><div class="rdot" style="background:#A78BFA"></div><div><div style="font-size:12px;font-weight:600">Stand</div><div style="font-size:10px;color:var(--muted)" id="stat-stand">0 / 12 hrs</div></div></div>
+        </div>
+      </div>
+
+      <div class="mg">
+        <div class="mc" id="hr-card" onclick="openPPG()" style="cursor:pointer;position:relative">
+          <div class="ml">Heart Rate <span style="font-size:9px;color:var(--g1);font-weight:600;margin-left:4px">📷 TAP</span></div>
+          <div class="mv" style="color:var(--danger)" id="stat-hr">—<span class="mu">bpm</span></div>
+          <div class="ms" style="color:var(--muted)" id="stat-hr-sub">tap to measure</div>
+        </div>
+        <div class="mc"><div class="ml">Calories</div><div class="mv" style="color:var(--warn)" id="stat-kcal">0<span class="mu">kcal</span></div><div class="ms" style="color:var(--muted)">log an activity</div></div>
+        <div class="mc"><div class="ml">Distance</div><div class="mv" style="color:var(--blue)" id="stat-dist">0<span class="mu">km</span></div><div class="ms" style="color:var(--muted)">log an activity</div></div>
+        <div class="mc"><div class="ml">Wellness Score</div><div class="mv" style="color:var(--g1)" id="stat-wellness">0<span class="mu">/100</span></div><div class="ms" style="color:var(--muted)">complete activities</div></div>
+      </div>
+
+      <div class="card" style="padding:12px 14px">
+        <div class="sh"><h3>Weekly Steps</h3><span style="font-size:10px;color:var(--muted)">Mon–Sun</span></div>
+        <div class="barchart" id="hbc"></div>
+      </div>
+
+      <div class="sh"><h3>Recent Activity</h3><span style="font-size:11px;color:var(--blue);cursor:pointer">See all</span></div>
+      <div class="card" style="padding:3px 14px" id="recent-activity-list">
+        <div style="text-align:center;padding:20px 0;color:var(--muted);font-size:12px">No activities yet — start tracking! 🏃</div>
+      </div>
+    </div>
+    <div class="bnav">
+      <div class="ni on" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ TRACK ═══════════ -->
+  <div class="screen" id="s-track">
+    <div class="sb"><span id="clk2">9:41</span></div>
+    <div class="hdr"><div class="logo"><div class="logo-mark"><i class="ti ti-leaf"></i></div><div class="logo-text">Nutri<span>vita</span> Fit</div></div><div class="jbadge"><div class="jdot"></div>Auto-detect ON</div></div>
+    <div class="sb2">
+      <div class="sh" style="margin-top:0"><h3>Sport Tracker</h3></div>
+      <div class="card" style="padding:12px 14px">
+        <div style="font-size:12px;color:var(--muted);line-height:1.65;margin-bottom:10px">AI detects 18+ sport types using motion sensors, GPS &amp; heart rate patterns.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <span class="tag tg">Running</span><span class="tag tb">Basketball</span><span class="tag tp">Swimming</span>
+          <span class="tag tg">Cycling</span><span class="tag tw">Football</span><span class="tag tb">Tennis</span>
+          <span class="tag tp">Badminton</span><span class="tag tw">Yoga</span><span class="tag tg">+10 more</span>
+        </div>
+      </div>
+      <div class="sh"><h3>Select Activity</h3></div>
+      <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px" id="chips">
+        <div class="chip on" data-s="run" onclick="selS(this)">🏃 Run</div>
+        <div class="chip" data-s="bike" onclick="selS(this)">🚴 Cycle</div>
+        <div class="chip" data-s="ball" onclick="selS(this)">🏀 Basketball</div>
+        <div class="chip" data-s="swim" onclick="selS(this)">🏊 Swim</div>
+        <div class="chip" data-s="tennis" onclick="selS(this)">🎾 Tennis</div>
+        <div class="chip" data-s="yoga" onclick="selS(this)">🧘 Yoga</div>
+      </div>
+      <!-- Live cycling map -->
+      <div id="map-panel" style="display:none;border-radius:12px;overflow:hidden;margin-bottom:12px;border:1px solid var(--color-border-tertiary)">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 13px;border-bottom:1px solid var(--color-border-tertiary)">
+          <div style="font-size:13px;font-weight:600;color:var(--blue)"><i class="ti ti-map" aria-hidden="true" style="margin-right:5px"></i>Live GPS Route</div>
+          <div style="font-size:11px;color:var(--muted)" id="map-coords">Waiting for GPS…</div>
+        </div>
+        <div id="ride-map" style="height:220px;width:100%"></div>
+        <div style="display:flex;gap:0;border-top:1px solid var(--color-border-tertiary)">
+          <div style="flex:1;padding:8px;text-align:center;border-right:1px solid var(--color-border-tertiary)">
+            <div style="font-size:15px;font-weight:700;color:var(--blue)" id="map-dist">0.00</div>
+            <div style="font-size:10px;color:var(--muted)">km</div>
+          </div>
+          <div style="flex:1;padding:8px;text-align:center;border-right:1px solid var(--color-border-tertiary)">
+            <div style="font-size:15px;font-weight:700;color:var(--g1)" id="map-speed">0.0</div>
+            <div style="font-size:10px;color:var(--muted)">km/h</div>
+          </div>
+          <div style="flex:1;padding:8px;text-align:center">
+            <div style="font-size:15px;font-weight:700;color:var(--warn)" id="map-elev">—</div>
+            <div style="font-size:10px;color:var(--muted)">m alt</div>
+          </div>
+        </div>
+      </div>
+      <!-- Post-ride summary -->
+      <div id="ride-summary" style="display:none;border-radius:12px;overflow:hidden;margin-bottom:12px;border:1px solid rgba(96,165,250,.3);background:rgba(96,165,250,.05)">
+        <div style="padding:12px 14px;border-bottom:1px solid rgba(96,165,250,.15)">
+          <div style="font-size:14px;font-weight:700;color:var(--blue)">🚴 Ride Complete!</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px" id="ride-date"></div>
+        </div>
+        <div id="summary-map" style="height:180px;width:100%"></div>
+        <div style="display:flex;gap:0;border-top:1px solid rgba(96,165,250,.15);border-bottom:1px solid rgba(96,165,250,.15)">
+          <div style="flex:1;padding:9px;text-align:center;border-right:1px solid rgba(96,165,250,.15)">
+            <div style="font-size:16px;font-weight:700;color:var(--blue)" id="sum-dist">—</div>
+            <div style="font-size:10px;color:var(--muted)">km</div>
+          </div>
+          <div style="flex:1;padding:9px;text-align:center;border-right:1px solid rgba(96,165,250,.15)">
+            <div style="font-size:16px;font-weight:700;color:var(--g1)" id="sum-dur">—</div>
+            <div style="font-size:10px;color:var(--muted)">duration</div>
+          </div>
+          <div style="flex:1;padding:9px;text-align:center;border-right:1px solid rgba(96,165,250,.15)">
+            <div style="font-size:16px;font-weight:700;color:var(--warn)" id="sum-speed">—</div>
+            <div style="font-size:10px;color:var(--muted)">avg km/h</div>
+          </div>
+          <div style="flex:1;padding:9px;text-align:center">
+            <div style="font-size:16px;font-weight:700;color:var(--danger)" id="sum-kcal">—</div>
+            <div style="font-size:10px;color:var(--muted)">kcal</div>
+          </div>
+        </div>
+        <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="openGoogleMaps()" style="flex:1;padding:9px;border-radius:8px;border:none;background:#4285F4;color:#fff;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;min-width:120px">
+            <i class="ti ti-map-2" aria-hidden="true"></i> View on Google Maps
+          </button>
+          <button onclick="shareRide()" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--color-border-tertiary);background:transparent;color:var(--color-text-primary);font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;min-width:100px">
+            <i class="ti ti-share" aria-hidden="true"></i> Share
+          </button>
+          <button onclick="document.getElementById('ride-summary').style.display='none'" style="padding:9px 12px;border-radius:8px;border:1px solid var(--color-border-tertiary);background:transparent;color:var(--color-text-secondary);font-size:12px;cursor:pointer">
+            Dismiss
+          </button>
+        </div>
+      </div>
+      <div class="card" id="lcard" style="display:none;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:700" id="lsname">Running</div>
+          <div class="liveb"><div class="ld"></div>LIVE</div>
+        </div>
+        <div class="lsg">
+          <div class="lsv"><div class="v" id="ltime">00:00</div><div class="l">Duration</div></div>
+          <div class="lsv"><div class="v" id="ldist">0.00</div><div class="l">km</div></div>
+          <div class="lsv"><div class="v" id="lhr">--</div><div class="l">bpm</div></div>
+        </div>
+        <div class="pbr" style="margin-bottom:14px"><div class="pbf" id="ibar" style="width:0%"></div></div>
+        <button class="trkbtn stop" onclick="stopT()"><i class="ti ti-player-stop"></i> Stop Session</button>
+      </div>
+      <button class="trkbtn start" id="startb" onclick="startT()"><i class="ti ti-player-play"></i> Start Session</button>
+    </div>
+    <div class="bnav">
+      <div class="ni" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni on" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ WELLNESS ═══════════ -->
+  <div class="screen" id="s-wellness">
+    <div class="sb"><span>9:41</span></div>
+    <div class="hdr"><div class="logo"><div class="logo-mark"><i class="ti ti-leaf"></i></div><div class="logo-text">Nutri<span>vita</span> Fit</div></div><div class="av" onclick="go('profile')" title="Profile" id="wellness-av">?</div></div>
+    <div class="sb2">
+      <div class="sh" style="margin-top:0"><h3>Wellness Activities</h3><span class="tag tw">+pts on completion</span></div>
+      <div class="mg" style="margin-bottom:12px">
+        <div class="mc"><div class="ml">Wellness Pts</div><div class="mv" style="color:var(--purple)" id="wpts-display">0<span class="mu">pts</span></div><div class="ms" style="color:var(--muted)" id="wtoday-display">+0 today</div></div>
+        <div class="mc"><div class="ml">Streak</div><div class="mv" style="color:var(--warn)">7<span class="mu">days</span></div><div class="ms" style="color:var(--muted)">Personal best 🔥</div></div>
+      </div>
+
+      <div class="sh"><h3>Mindfulness</h3></div>
+      <div class="wcard" data-wkey="guided_meditation" onclick="logW(this,'Guided Meditation',20)">
+        <div class="wci"><div class="wico" style="background:rgba(167,139,250,.12)"><i class="ti ti-brain" style="color:var(--purple)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Guided Meditation</div><div style="font-size:11px;color:var(--muted)">10–20 min · Reduce stress &amp; improve focus</div></div><span class="diff de">+20 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--purple);width:0%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">Tap to log today's session</div>
+      </div>
+      <div class="wcard" data-wkey="breathwork" onclick="logW(this,'Breathwork',15)">
+        <div class="wci"><div class="wico" style="background:rgba(167,139,250,.12)"><i class="ti ti-wind" style="color:var(--purple)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Breathwork</div><div style="font-size:11px;color:var(--muted)">5–10 min · Box breathing or 4-7-8 method</div></div><span class="diff de">+15 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--purple);width:0%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">Tap to log today's session</div>
+      </div>
+
+      <div class="sh"><h3>Recovery</h3></div>
+      <div class="wcard" data-wkey="sleep_tracking" onclick="logW(this,'Sleep Tracking',25)">
+        <div class="wci"><div class="wico" style="background:rgba(96,165,250,.12)"><i class="ti ti-moon" style="color:var(--blue)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Sleep Tracking</div><div style="font-size:11px;color:var(--muted)">Log 7–9 hrs · Quality sleep recovery</div></div><span class="diff dm">+25 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--blue);width:85%"></div></div>
+        <div style="font-size:10px;color:var(--g1);margin-top:5px" class="w-lbl">7h 12min logged last night ✓</div>
+      </div>
+      <div class="wcard" data-wkey="morning_stretching" onclick="logW(this,'Morning Stretching',15)">
+        <div class="wci"><div class="wico" style="background:rgba(29,185,84,.12)"><i class="ti ti-yoga" style="color:var(--g1)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Morning Stretching</div><div style="font-size:11px;color:var(--muted)">10 min · Improve flexibility &amp; posture</div></div><span class="diff de">+15 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="width:0%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">Tap to log today's session</div>
+      </div>
+
+      <div class="sh"><h3>Nutrition</h3></div>
+      <div class="wcard" data-wkey="hydration_goal" onclick="logW(this,'Hydration Goal',10)">
+        <div class="wci"><div class="wico" style="background:rgba(96,165,250,.12)"><i class="ti ti-droplet" style="color:var(--blue)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Hydration Goal</div><div style="font-size:11px;color:var(--muted)">8 glasses · 2 litres daily target</div></div><span class="diff de">+10 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--blue);width:62%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">5 / 8 glasses — tap to complete</div>
+      </div>
+      <div class="wcard" data-wkey="balanced_meal_log" onclick="logW(this,'Balanced Meal Log',20)">
+        <div class="wci"><div class="wico" style="background:rgba(245,158,11,.12)"><i class="ti ti-salad" style="color:var(--warn)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Balanced Meal Log</div><div style="font-size:11px;color:var(--muted)">Log nutritious meals · Protein, fibre &amp; vitamins</div></div><span class="diff dm">+20 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--warn);width:33%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">1 / 3 meals logged — tap to update</div>
+      </div>
+
+      <div class="sh"><h3>Mental Health</h3></div>
+      <div class="wcard" data-wkey="mood_check-in" onclick="logW(this,'Mood Check-in',10)">
+        <div class="wci"><div class="wico" style="background:rgba(167,139,250,.12)"><i class="ti ti-mood-smile" style="color:var(--purple)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Daily Mood Check-in</div><div style="font-size:11px;color:var(--muted)">2 min · Track emotional wellbeing</div></div><span class="diff de">+10 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--purple);width:0%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">Tap to log today's mood</div>
+      </div>
+      <div class="wcard" data-wkey="gratitude_journal" onclick="logW(this,'Gratitude Journal',10)">
+        <div class="wci"><div class="wico" style="background:rgba(167,139,250,.12)"><i class="ti ti-notebook" style="color:var(--purple)"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:700">Gratitude Journal</div><div style="font-size:11px;color:var(--muted)">3 min · Write 3 things you're grateful for</div></div><span class="diff de">+10 pts</span></div>
+        <div class="pbr"><div class="pbf w-bar" style="background:var(--purple);width:0%"></div></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px" class="w-lbl">Tap to log today's entry</div>
+      </div>
+    </div>
+    <div class="bnav">
+      <div class="ni" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni on" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ LEADERBOARD ═══════════ -->
+  <div class="screen" id="s-lb">
+    <div class="sb"><span>9:41</span></div>
+    <div class="hdr"><div class="logo"><div class="logo-mark"><i class="ti ti-leaf"></i></div><div class="logo-text">Nutri<span>vita</span> Fit</div></div><div class="jbadge"><div class="jdot"></div><span id="emp-count">—</span> Registered</div></div>
+    <div class="sb2">
+      <div class="card" id="signup-card" style="background:rgba(29,185,84,.05);border-color:rgba(29,185,84,.3);margin-bottom:12px">
+        <div style="font-size:14px;font-weight:700;margin-bottom:4px">Join the Leaderboard</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Register to compete with colleagues and earn wellness points.</div>
+        <input type="text" id="reg-name" placeholder="Your full name" style="margin-bottom:8px">
+        <input type="text" id="reg-dept" placeholder="Department (e.g. Engineering)" style="margin-bottom:12px">
+        <button class="btn-pr" onclick="registerUser()">Join Nutrivita Fit 🌿</button>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="lb-tab on" onclick="showLB('overall',this)">Overall</div>
+        <div class="lb-tab" onclick="showLB('fitness',this)">Fitness</div>
+        <div class="lb-tab" onclick="showLB('wellness',this)">Wellness</div>
+        <div class="lb-tab" onclick="showLB('dept',this)">Department</div>
+      </div>
+
+      <div id="podium-wrap" style="display:flex;justify-content:center;align-items:flex-end;gap:8px;margin-bottom:14px">
+        <div style="text-align:center;flex:1">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px">2nd</div>
+          <div class="lbav" style="background:rgba(192,192,192,.08);color:rgba(192,192,192,.35);margin:0 auto;width:40px;height:40px">—</div>
+          <div style="font-size:11px;font-weight:700;margin-top:4px;color:var(--muted)">—</div>
+          <div class="pod-bar" style="background:rgba(192,192,192,.06);border:.5px solid rgba(192,192,192,.1);height:48px;margin-top:6px;color:rgba(192,192,192,.3)">—</div>
+        </div>
+        <div style="text-align:center;flex:1">
+          <div style="font-size:14px;margin-bottom:2px">👑</div>
+          <div class="lbav" style="background:rgba(255,215,0,.06);color:rgba(255,215,0,.3);margin:0 auto;width:46px;height:46px">—</div>
+          <div style="font-size:11px;font-weight:700;margin-top:4px;color:var(--muted)">—</div>
+          <div class="pod-bar" style="background:rgba(255,215,0,.04);border:.5px solid rgba(255,215,0,.1);height:66px;margin-top:6px;color:rgba(255,215,0,.3)">—</div>
+        </div>
+        <div style="text-align:center;flex:1">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px">3rd</div>
+          <div class="lbav" style="background:rgba(205,127,50,.08);color:rgba(205,127,50,.3);margin:0 auto;width:40px;height:40px">—</div>
+          <div style="font-size:11px;font-weight:700;margin-top:4px;color:var(--muted)">—</div>
+          <div class="pod-bar" style="background:rgba(205,127,50,.04);border:.5px solid rgba(205,127,50,.1);height:36px;margin-top:6px;color:rgba(205,127,50,.3)">—</div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:3px 14px" id="lb-list"></div>
+
+      <div class="card" style="margin-top:10px;padding:12px 14px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px">Monthly Challenges</div>
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span>June Step Challenge</span><span style="color:var(--g1);font-weight:600">217,200 / 300,000</span></div>
+          <div class="pbr"><div class="pbf" style="width:72%"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span>Wellness Week</span><span style="color:var(--purple);font-weight:600">5 / 7 days</span></div>
+          <div class="pbr"><div class="pbf" style="width:71%;background:var(--purple)"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="bnav">
+      <div class="ni" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni on" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ COACH ═══════════ -->
+  <!-- ═══════════ MESSAGE BOARD ═══════════ -->
+  <div class="screen" id="s-msg">
+    <div class="sb" style="flex-shrink:0"><span>9:41</span><div style="width:8px;height:8px;border-radius:50%;background:var(--g1)"></div></div>
+    <div class="hdr" style="flex-shrink:0">
+      <div class="logo"><div class="logo-mark"><i class="ti ti-message-circle"></i></div><div class="logo-text">Team <span>Board</span></div></div>
+      <div style="font-size:11px;color:var(--g1);font-weight:600" id="msg-online-count"></div>
+    </div>
+    <!-- Messages list -->
+    <div class="sb2" id="msg-scroll" style="padding:10px 16px;gap:0">
+      <div id="msg-body" style="display:flex;flex-direction:column;gap:8px;min-height:100%">
+        <div style="text-align:center;padding:24px 0;color:var(--muted);font-size:12px" id="msg-empty">Loading messages…</div>
+      </div>
+    </div>
+    <!-- Input -->
+    <div style="display:flex;gap:8px;align-items:flex-end;padding:8px 16px;padding-bottom:calc(14px + var(--safe-bot));flex-shrink:0;border-top:1px solid var(--color-border-tertiary);background:var(--bg)">
+      <textarea id="msg-input" rows="1" placeholder="Write a message…" style="flex:1;background:var(--surf2);border:none;border-radius:12px;padding:10px 13px;font-family:'Syne',sans-serif;font-size:13px;color:var(--text);resize:none;outline:none;max-height:80px"></textarea>
+      <button onclick="sendMessage()" style="background:var(--g1);border:none;border-radius:50%;width:40px;height:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer">
+        <i class="ti ti-send" style="font-size:16px;color:#fff"></i>
+      </button>
+    </div>
+    <div class="bnav" style="flex-shrink:0">
+      <div class="ni" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni on" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ PROFILE ═══════════ -->
+  <div class="screen" id="s-profile">
+    <div class="sb"><span>9:41</span></div>
+    <div class="hdr"><div class="logo"><div class="logo-mark"><i class="ti ti-leaf"></i></div><div class="logo-text">Nutri<span>vita</span> Fit</div></div></div>
+    <div class="sb2">
+      <div class="card" style="text-align:center;padding:22px 14px">
+        <div style="width:68px;height:68px;border-radius:50%;background:var(--g1);margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff" id="profile-av">?</div>
+        <div style="font-size:17px;font-weight:700" id="profile-name">Not registered</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px" id="profile-dept">Join via the Leaderboard tab</div>
+        <div style="display:flex;justify-content:center;gap:6px;margin-top:10px">
+          <span class="tag tg">Streak: 7d 🔥</span><span class="tag tb">Level 12</span>
+        </div>
+      </div>
+      <div class="mg">
+        <div class="mc"><div class="ml">This Month</div><div class="mv" style="color:var(--g1)" id="profile-steps">0<span class="mu" style="font-size:9px"> steps</span></div></div>
+        <div class="mc"><div class="ml">Sessions</div><div class="mv" style="color:var(--blue)" id="profile-sessions">0<span class="mu"> total</span></div></div>
+      </div>
+      <div class="sh"><h3>Daily Goals</h3></div>
+      <div class="card">
+        <div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>Steps</span><span style="color:var(--g1);font-weight:600" id="goal-steps-lbl">0 / 10,000</span></div><div class="pbr"><div class="pbf" id="goal-steps-bar" style="width:0%"></div></div></div>
+        <div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>Calories</span><span style="color:var(--warn);font-weight:600" id="goal-kcal-lbl">0 / 600 kcal</span></div><div class="pbr"><div class="pbf" id="goal-kcal-bar" style="width:0%;background:var(--warn)"></div></div></div>
+        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>Exercise</span><span style="color:var(--blue);font-weight:600" id="goal-ex-lbl">0 / 30 min</span></div><div class="pbr"><div class="pbf" id="goal-ex-bar" style="width:0%;background:var(--blue)"></div></div></div>
+      </div>
+      <div class="sh"><h3>Settings</h3></div>
+      <div class="card" style="padding:4px 14px">
+        <div class="togr"><div><div style="font-size:13px;font-weight:600">Auto-detect Sports</div><div style="font-size:11px;color:var(--muted)">AI identifies your activity type</div></div><div class="tog" onclick="this.classList.toggle('off')"></div></div>
+        <div class="togr"><div><div style="font-size:13px;font-weight:600">Push Notifications</div><div style="font-size:11px;color:var(--muted)">Daily reminders &amp; coach nudges</div></div><div class="tog" id="notif-tog" onclick="toggleNotifs(this)"></div></div>
+        <div class="togr"><div><div style="font-size:13px;font-weight:600">Heart Rate Monitor</div><div style="font-size:11px;color:var(--muted)">Continuous tracking</div></div><div class="tog" onclick="this.classList.toggle('off')"></div></div>
+        <div class="togr"><div><div style="font-size:13px;font-weight:600">Team Visibility</div><div style="font-size:11px;color:var(--muted)">Share progress with colleagues</div></div><div class="tog off" onclick="this.classList.toggle('off')"></div></div>
+      </div>
+
+      <div id="install-card" class="card" style="background:rgba(29,185,84,.05);border-color:rgba(29,185,84,.3);margin-top:4px;display:none">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:40px;height:40px;border-radius:10px;background:var(--g1);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-download" style="color:#fff;font-size:20px"></i></div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:700">Install App</div>
+            <div style="font-size:11px;color:var(--muted)">Add to home screen for offline use</div>
+          </div>
+          <button class="btn-pr" style="width:auto;padding:9px 14px;font-size:12px" id="install-card-btn">Install</button>
+        </div>
+      </div>
+    </div>
+    <div class="bnav">
+      <div class="ni" onclick="go('home')"><i class="ti ti-home-2"></i><span>Home</span></div>
+      <div class="ni" onclick="go('track')"><i class="ti ti-player-record"></i><span>Track</span></div>
+      <div class="ni" onclick="go('wellness')"><i class="ti ti-leaf"></i><span>Wellness</span></div>
+      <div class="ni" onclick="go('lb')"><i class="ti ti-trophy"></i><span>Leaderboard</span></div>
+      <div class="ni" onclick="go('msg')"><i class="ti ti-message-circle"></i><span>Board</span></div>
+      <div class="ni on" onclick="go('profile')"><i class="ti ti-user"></i><span>Profile</span></div>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script>
+// ── TAB NAVIGATION ──────────────────────────────────────────
+const TABS=['home','track','wellness','lb','msg','profile'];
+window.addEventListener('beforeunload',()=>{if(rideWatchId!=null)navigator.geolocation.clearWatch(rideWatchId);});
+function go(t){
+  TABS.forEach(x=>{const s=document.getElementById('s-'+x);if(s)s.classList.toggle('active',x===t);});
+  if(t==='lb')renderLB(currentLBType);
+  // Handle URL param for shortcuts
+  try{history.replaceState(null,'','?tab='+t);}catch(e){}
+}
+
+// Check if launched via shortcut
+(function(){
+  const p=new URLSearchParams(location.search).get('tab');
+  if(p&&TABS.includes(p))go(p);
+})();
+
+// ── CLOCK ───────────────────────────────────────────────────
+(function tick(){
+  const now=new Date();
+  const t=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  ['clk','clk2'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=t;});
+  setTimeout(tick,15000);
+})();
+
+// ── DATE LABEL ──────────────────────────────────────────────
+(function(){
+  const el=document.getElementById('date-lbl');
+  if(!el)return;
+  const d=new Date();
+  el.textContent=d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'});
+})();
+
+// ── BAR CHART ───────────────────────────────────────────────
+(function(){
+  const days=['M','T','W','T','F','S','S'],vals=[0,0,0,0,0,0,0],mx=1;
+  const c=document.getElementById('hbc');if(!c)return;
+  days.forEach((d,i)=>{
+    const col=document.createElement('div');col.className='bc';
+    const bar=document.createElement('div');bar.className='bb'+(i===6?' t':'');
+    bar.style.height='2px';bar.style.opacity='0.2';
+    const lbl=document.createElement('div');lbl.className='bl';lbl.textContent=d;
+    col.appendChild(bar);col.appendChild(lbl);c.appendChild(col);
+  });
+})();
+
+// ══════════════════════════════════════════════════════════════
+// PERSISTENCE — localStorage helpers
+// ══════════════════════════════════════════════════════════════
+const LS={
+  get(k,def=null){try{const v=localStorage.getItem('nvf_'+k);return v!==null?JSON.parse(v):def;}catch{return def;}},
+  set(k,v){try{localStorage.setItem('nvf_'+k,JSON.stringify(v));}catch{}},
+};
+function todayKey(){return new Date().toISOString().slice(0,10);}
+
+// ── USER PROFILE ─────────────────────────────────────────────
+let userProfile = LS.get('profile', null);
+if(userProfile)window._currentUserName=userProfile.name;
+
+// ── DAILY STATS ──────────────────────────────────────────────
+function getTodayStats(){
+  const def={steps:0,kcal:0,distKm:0,exMins:0,standHrs:0,wellnessPts:0,wellnessPtsToday:0};
+  return {...def,...LS.get('stats_'+todayKey(), def)};
+}
+function saveTodayStats(){LS.set('stats_'+todayKey(), todayStats);pushMyScoreToCloud();}
+let todayStats = getTodayStats();
+
+// ── ACTIVITY LOG ─────────────────────────────────────────────
+let activityLog = LS.get('activities', []);
+
+// ── WEEKLY STEPS ─────────────────────────────────────────────
+function getWeeklySteps(){
+  const days=[];const now=new Date();
+  for(let i=6;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  return days.map(d=>{const s=LS.get('stats_'+d,{steps:0});return{date:d,steps:s.steps||0};});
+}
+
+// ══════════════════════════════════════════════════════════════
+// UI UPDATE
+// ══════════════════════════════════════════════════════════════
+function refreshUI(){
+  const s=todayStats;
+  const av=userProfile?userProfile.initials:'?';
+
+  const hav=document.getElementById('home-av');if(hav)hav.textContent=av;
+  const wav=document.getElementById('wellness-av');if(wav)wav.textContent=av;
+
+  // Rings
+  const ringSteps=document.getElementById('ring-steps');
+  if(ringSteps)ringSteps.textContent=s.steps.toLocaleString();
+  const moveRing=document.getElementById('ring-move');
+  if(moveRing)moveRing.style.strokeDashoffset=376.99*(1-Math.min(1,s.kcal/600));
+  const exRing=document.getElementById('ring-exercise');
+  if(exRing)exRing.style.strokeDashoffset=282.74*(1-Math.min(1,s.exMins/30));
+  const stRing=document.getElementById('ring-stand');
+  if(stRing)stRing.style.strokeDashoffset=194.78*(1-Math.min(1,s.standHrs/12));
+
+  // Ring legend
+  const sm=document.getElementById('stat-move');if(sm)sm.textContent=s.kcal+' / 600 kcal';
+  const se=document.getElementById('stat-exercise');if(se)se.textContent=s.exMins+' / 30 min';
+  const ss=document.getElementById('stat-stand');if(ss)ss.textContent=s.standHrs+' / 12 hrs';
+
+  // Metric cards
+  const sk=document.getElementById('stat-kcal');if(sk)sk.innerHTML=s.kcal+'<span class="mu">kcal</span>';
+  const sd=document.getElementById('stat-dist');if(sd)sd.innerHTML=s.distKm.toFixed(1)+'<span class="mu">km</span>';
+  const sw=document.getElementById('stat-wellness');if(sw)sw.innerHTML=Math.min(100,Math.round(s.wellnessPts/10))+'<span class="mu">/100</span>';
+
+  // Wellness tab
+  const pd=document.getElementById('wpts-display');
+  if(pd)pd.innerHTML=s.wellnessPts.toLocaleString()+'<span class="mu">pts</span>';
+  const td=document.getElementById('wtoday-display');
+  if(td)td.textContent='+'+s.wellnessPtsToday+' today';
+
+  // Profile
+  const pav=document.getElementById('profile-av');if(pav)pav.textContent=av;
+  const pnm=document.getElementById('profile-name');if(pnm)pnm.textContent=userProfile?userProfile.name:'Not registered';
+  const pdt=document.getElementById('profile-dept');if(pdt)pdt.textContent=userProfile?(userProfile.dept+' · Nutrivita Fit'):'Join via the Leaderboard tab';
+  const ps=document.getElementById('profile-steps');
+  if(ps)ps.innerHTML=s.steps.toLocaleString()+'<span class="mu" style="font-size:9px"> steps</span>';
+  const psess=document.getElementById('profile-sessions');
+  if(psess)psess.innerHTML=activityLog.filter(a=>a.date===todayKey()).length+'<span class="mu"> total</span>';
+
+  // Goal bars
+  const gsl=document.getElementById('goal-steps-lbl');if(gsl)gsl.textContent=s.steps.toLocaleString()+' / 10,000';
+  const gsb=document.getElementById('goal-steps-bar');if(gsb)gsb.style.width=Math.min(100,Math.round(s.steps/100))+'%';
+  const gkl=document.getElementById('goal-kcal-lbl');if(gkl)gkl.textContent=s.kcal+' / 600 kcal';
+  const gkb=document.getElementById('goal-kcal-bar');if(gkb)gkb.style.width=Math.min(100,Math.round(s.kcal/6))+'%';
+  const gel=document.getElementById('goal-ex-lbl');if(gel)gel.textContent=s.exMins+' / 30 min';
+  const geb=document.getElementById('goal-ex-bar');if(geb)geb.style.width=Math.min(100,Math.round(s.exMins/30*100))+'%';
+
+  // Weekly bar chart
+  const wk=getWeeklySteps();
+  const mx=Math.max(1,...wk.map(d=>d.steps));
+  const hbc=document.getElementById('hbc');
+  if(hbc){
+    hbc.innerHTML='';
+    ['M','T','W','T','F','S','S'].forEach((day,i)=>{
+      const isToday=wk[i].date===todayKey();
+      const col=document.createElement('div');col.className='bc';
+      const bar=document.createElement('div');bar.className='bb'+(isToday?' t':'');
+      bar.style.height=Math.max(2,Math.round((wk[i].steps/mx)*58))+'px';
+      if(!wk[i].steps)bar.style.opacity='0.2';
+      const lbl=document.createElement('div');lbl.className='bl';lbl.textContent=day;
+      col.appendChild(bar);col.appendChild(lbl);hbc.appendChild(col);
+    });
+  }
+
+  // Recent activity
+  const ral=document.getElementById('recent-activity-list');
+  if(ral){
+    const recent=activityLog.slice(-5).reverse();
+    if(!recent.length){
+      ral.innerHTML='<div style="text-align:center;padding:20px 0;color:var(--muted);font-size:12px">No activities yet — start tracking! 🏃</div>';
+    } else {
+      ral.innerHTML=recent.map(a=>`<div class="air"><div class="aic" style="background:${a.bg}"><i class="ti ${a.icon}" style="color:${a.color}"></i></div><div style="flex:1"><div style="font-size:13px;font-weight:600">${a.name} <span class="tag ${a.tag}">${a.auto?'Auto':'Manual'}</span></div><div style="font-size:11px;color:var(--muted)">${a.time} · ${a.duration} min</div></div><div style="font-size:13px;font-weight:700;color:${a.color}">${a.kcal?a.kcal+' kcal':'+'+a.pts+' pts'}</div></div>`).join('');
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// PEDOMETER — real accelerometer step counting
+// Car-vibration resistant: uses dynamic threshold, variance
+// gate, rhythm check, and a higher cooldown to ignore
+// high-frequency road/vehicle vibrations.
+// ══════════════════════════════════════════════════════════════
+let stepBuf=[],lastStepTime=0,pedometerActive=false;
+// Threshold: require a clear spike above rolling average
+const STEP_THRESHOLD=1.8;
+// Cooldown: human steps are ~400-700ms apart
+const STEP_COOLDOWN=380;
+// Variance gate: accept medium-to-high variance (real walking)
+// Lower bound stops micro-vibrations; upper bound is very generous
+// to NOT block real running/walking which has high variance
+const VAR_MIN=0.3, VAR_MAX=200;
+// Rhythm gate: raised to 8 steps per 3s — allows fast running (~160 spm)
+// Car vibrations produce 15-30 peaks/3s so this still filters them
+let stepTimestamps=[];
+const MAX_STEPS_PER_3S=8;
+
+function onMotion(e){
+  const acc=e.accelerationIncludingGravity||e.acceleration;
+  if(!acc)return;
+  const {x,y,z}=acc;if(x==null)return;
+  const mag=Math.sqrt(x*x+y*y+z*z);
+  stepBuf.push(mag);if(stepBuf.length>20)stepBuf.shift();
+  const avg=stepBuf.reduce((a,b)=>a+b,0)/stepBuf.length;
+  // Variance over recent window
+  const variance=stepBuf.reduce((a,b)=>a+(b-avg)**2,0)/stepBuf.length;
+  const now=Date.now();
+
+  // ── Variance gate: reject car-vibration patterns ──
+  if(variance<VAR_MIN||variance>VAR_MAX)return;
+
+  if(mag>avg+STEP_THRESHOLD&&now-lastStepTime>STEP_COOLDOWN){
+    // ── Rhythm gate: reject rapid-fire vibration bursts ──
+    stepTimestamps.push(now);
+    stepTimestamps=stepTimestamps.filter(t=>now-t<3000);
+    if(stepTimestamps.length>MAX_STEPS_PER_3S)return;
+
+    lastStepTime=now;
+    todayStats.steps++;
+    todayStats.kcal=Math.round(todayStats.steps*0.04);
+    todayStats.distKm=Math.round(todayStats.steps*0.00075*100)/100;
+    if(isTracking){todayStats.exMins=Math.max(todayStats.exMins,Math.round(sessionElapsed/60));}
+    saveTodayStats();
+    // live step flash
+    const el=document.getElementById('ring-steps');
+    if(el){el.textContent=todayStats.steps.toLocaleString();el.style.fill='#1DB954';setTimeout(()=>el.style.fill='#EEF5EE',300);}
+    const rm=document.getElementById('ring-move');
+    if(rm)rm.style.strokeDashoffset=376.99*(1-Math.min(1,todayStats.kcal/600));
+    const sm2=document.getElementById('stat-move');if(sm2)sm2.textContent=todayStats.kcal+' / 600 kcal';
+    // activity detection
+    detectActivity(mag);
+  }
+}
+
+function startPedometer(){
+  if(pedometerActive)return;
+  if(!('DeviceMotionEvent' in window))return;
+  if(typeof DeviceMotionEvent.requestPermission==='function'){
+    DeviceMotionEvent.requestPermission().then(s=>{
+      if(s==='granted'){window.addEventListener('devicemotion',onMotion,{passive:true});pedometerActive=true;}
+    }).catch(()=>{});
+  } else {
+    window.addEventListener('devicemotion',onMotion,{passive:true});
+    pedometerActive=true;
+  }
+}
+
+// ── ACTIVITY AUTO-DETECTION ───────────────────────────────────
+let motionMags=[],lastDetectTime=0,detectedActivity=null;
+function detectActivity(mag){
+  motionMags.push(mag);if(motionMags.length>60)motionMags.shift();
+  const now=Date.now();if(now-lastDetectTime<6000||motionMags.length<30)return;
+  lastDetectTime=now;
+  const avg=motionMags.reduce((a,b)=>a+b,0)/motionMags.length;
+  const variance=motionMags.reduce((a,b)=>a+(b-avg)**2,0)/motionMags.length;
+  const recentSteps=stepBuf.length;
+  let name=null;
+  if(recentSteps>6&&variance>6)name='Running';
+  else if(recentSteps>3&&variance>3)name='Brisk Walk';
+  else if(recentSteps>1)name='Walking';
+  else if(variance>5)name='Cycling';
+  else if(variance>2)name='Exercise';
+  if(name&&name!==detectedActivity){
+    detectedActivity=name;
+    if(isTracking){
+      const el=document.getElementById('lsname');
+      if(el)el.textContent=name+' (detected)';
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ACTIVITY TRACKING (manual session)
+// ══════════════════════════════════════════════════════════════
+let trk=null,ts=0,tdist=0,sel='run',isTracking=false,sessionElapsed=0;
+const SNAMES={run:'Running',bike:'Cycling',ball:'Basketball',swim:'Swimming',tennis:'Tennis',yoga:'Yoga'};
+const AMETA={
+  'Running':    {icon:'ti-run',   color:'var(--g1)',    bg:'rgba(29,185,84,.12)', tag:'tg',kpm:10},
+  'Brisk Walk': {icon:'ti-walk',  color:'var(--g1)',    bg:'rgba(29,185,84,.12)', tag:'tg',kpm:5},
+  'Walking':    {icon:'ti-walk',  color:'var(--muted)', bg:'rgba(107,124,107,.12)',tag:'',  kpm:3},
+  'Cycling':    {icon:'ti-bike',  color:'var(--blue)',  bg:'rgba(96,165,250,.12)',tag:'tb',kpm:8},
+  'Basketball': {icon:'ti-ball-basketball',color:'var(--blue)',bg:'rgba(96,165,250,.12)',tag:'tb',kpm:9},
+  'Swimming':   {icon:'ti-swim',  color:'var(--blue)',  bg:'rgba(96,165,250,.12)',tag:'tb',kpm:11},
+  'Tennis':     {icon:'ti-tennis',color:'var(--warn)',  bg:'rgba(245,158,11,.12)',tag:'tw',kpm:8},
+  'Yoga':       {icon:'ti-yoga',  color:'var(--purple)',bg:'rgba(167,139,250,.12)',tag:'tp',kpm:3},
+  'Exercise':   {icon:'ti-barbell',color:'var(--g1)',   bg:'rgba(29,185,84,.12)', tag:'tg',kpm:7},
+};
+
+function selS(el){document.querySelectorAll('#chips .chip').forEach(c=>c.classList.remove('on'));el.classList.add('on');sel=el.dataset.s;}
+
+// ══════════════════════════════════════════════════════════════
+// CYCLING MAP — GPS route tracking with Leaflet + Google Maps export
+// ══════════════════════════════════════════════════════════════
+let rideMap=null,summaryMap=null,ridePolyline=null,rideMarkerStart=null,rideMarkerCurrent=null;
+let rideCoords=[],rideWatchId=null,rideDistKm=0,rideLastCoord=null,rideStartTime=null;
+
+
+function haversine(a,b){
+  const R=6371,dLat=(b[0]-a[0])*Math.PI/180,dLon=(b[1]-a[1])*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+}
+
+function initRideMap(lat,lng){
+  const panel=document.getElementById('map-panel');
+  if(!panel)return;
+  panel.style.display='block';
+  if(!rideMap){
+    rideMap=L.map('ride-map',{zoomControl:false,attributionControl:false}).setView([lat,lng],16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(rideMap);
+    L.control.zoom({position:'bottomright'}).addTo(rideMap);
+    const startIcon=L.divIcon({className:'',html:'<div style="background:#1DB954;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.4)"></div>',iconSize:[12,12],iconAnchor:[6,6]});
+    rideMarkerStart=L.marker([lat,lng],{icon:startIcon}).addTo(rideMap).bindPopup('Start');
+    ridePolyline=L.polyline([],{color:'#60A5FA',weight:4,opacity:.85}).addTo(rideMap);
+    const curIcon=L.divIcon({className:'',html:'<div style="background:#60A5FA;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(96,165,250,.6)"></div>',iconSize:[14,14],iconAnchor:[7,7]});
+    rideMarkerCurrent=L.marker([lat,lng],{icon:curIcon}).addTo(rideMap).bindPopup('You are here');
+  }
+}
+
+function onRidePosition(pos){
+  const {latitude:lat,longitude:lng,altitude,speed}=pos.coords;
+  const coord=[lat,lng];
+  rideCoords.push(coord);
+  if(rideLastCoord){
+    rideDistKm+=haversine(rideLastCoord,coord);
+    document.getElementById('map-dist').textContent=rideDistKm.toFixed(2);
+    // update today stats too
+    todayStats.distKm=parseFloat((todayStats.distKm+haversine(rideLastCoord,coord)).toFixed(2));
+  }
+  rideLastCoord=coord;
+  // speed
+  const spd=speed!=null?Math.round(speed*3.6):(rideDistKm>0&&rideStartTime?Math.round(rideDistKm/((Date.now()-rideStartTime)/3600000)):0);
+  document.getElementById('map-speed').textContent=spd;
+  if(altitude!=null)document.getElementById('map-elev').textContent=Math.round(altitude);
+  document.getElementById('map-coords').textContent=lat.toFixed(5)+', '+lng.toFixed(5);
+  // update map
+  if(!rideMap)initRideMap(lat,lng);
+  if(ridePolyline)ridePolyline.setLatLngs(rideCoords);
+  if(rideMarkerCurrent)rideMarkerCurrent.setLatLng(coord);
+  if(rideMap)rideMap.panTo(coord,{animate:true,duration:0.5});
+}
+
+function startCycleTracking(){
+  rideCoords=[];rideDistKm=0;rideLastCoord=null;rideStartTime=Date.now();
+  document.getElementById('map-panel').style.display='block';
+  document.getElementById('ride-summary').style.display='none';
+  if(!navigator.geolocation){
+    document.getElementById('map-coords').textContent='GPS not available on this device';
+    return;
+  }
+  // Show waiting state immediately
+  document.getElementById('map-coords').textContent='Requesting GPS…';
+
+  // iOS 13+ requires a user-gesture-triggered permission request
+  const doWatch=()=>{
+    // Get initial fix fast so map renders before user starts moving
+    navigator.geolocation.getCurrentPosition(pos=>{
+      initRideMap(pos.coords.latitude,pos.coords.longitude);
+      onRidePosition(pos);
+      setTimeout(()=>{if(rideMap)rideMap.invalidateSize();},300);
+    },err=>{
+      document.getElementById('map-coords').textContent='GPS: '+err.message;
+    },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+
+    // Continuous watch
+    rideWatchId=navigator.geolocation.watchPosition(onRidePosition,
+      err=>document.getElementById('map-coords').textContent='GPS: '+err.message,
+      {enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+  };
+
+  // On iOS 13+ DeviceMotionEvent.requestPermission pattern also covers
+  // geolocation in some browsers — but geolocation itself is gated by
+  // the browser asking the user at first call, so just call it directly.
+  doWatch();
+}
+
+function stopCycleTracking(durationMins,kcal){
+  if(rideWatchId!=null){navigator.geolocation.clearWatch(rideWatchId);rideWatchId=null;}
+  document.getElementById('map-panel').style.display='none';
+  if(rideCoords.length<2)return;
+  // Show summary
+  const avgSpd=rideDistKm>0&&rideStartTime?Math.round(rideDistKm/((durationMins||1)/60)*10)/10:0;
+  document.getElementById('sum-dist').textContent=rideDistKm.toFixed(2);
+  const m=String(Math.floor(durationMins)).padStart(2,'0'),s=String(Math.round((durationMins%1)*60)).padStart(2,'0');
+  document.getElementById('sum-dur').textContent=m+':'+s;
+  document.getElementById('sum-speed').textContent=avgSpd;
+  document.getElementById('sum-kcal').textContent=kcal;
+  document.getElementById('ride-date').textContent=new Date().toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+' · '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('ride-summary').style.display='block';
+  // update the session title dynamically
+  const sumTitle=document.querySelector('#ride-summary [style*="font-size:14px"]');
+  if(sumTitle){const icons={run:'🏃',bike:'🚴',ball:'🏀',swim:'🏊',tennis:'🎾',yoga:'🧘'};sumTitle.textContent=(icons[sel]||'🏅')+' '+(SNAMES[sel]||'Session')+' Complete!';}
+  // Save route coords for Google Maps export
+  LS.set('last_ride_coords', rideCoords);
+  // Render summary map
+  setTimeout(()=>{
+    if(!summaryMap){
+      summaryMap=L.map('summary-map',{zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false});
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(summaryMap);
+    }
+    const poly=L.polyline(rideCoords,{color:'#60A5FA',weight:4,opacity:.85}).addTo(summaryMap);
+    summaryMap.fitBounds(poly.getBounds(),{padding:[16,16]});
+    summaryMap.invalidateSize();
+    // start/end markers
+    const mkS=L.divIcon({className:'',html:'<div style="background:#1DB954;width:10px;height:10px;border-radius:50%;border:2px solid #fff"></div>',iconSize:[10,10],iconAnchor:[5,5]});
+    const mkE=L.divIcon({className:'',html:'<div style="background:#F87171;width:10px;height:10px;border-radius:50%;border:2px solid #fff"></div>',iconSize:[10,10],iconAnchor:[5,5]});
+    L.marker(rideCoords[0],{icon:mkS}).addTo(summaryMap);
+    L.marker(rideCoords[rideCoords.length-1],{icon:mkE}).addTo(summaryMap);
+  },300);
+}
+
+function openGoogleMaps(){
+  const coords=LS.get('last_ride_coords',[]);
+  if(!coords||coords.length<2){alert('No ride route saved yet.');return;}
+  // Google Maps directions URL using waypoints (max 8 waypoints for free)
+  const step=Math.max(1,Math.floor(coords.length/8));
+  const waypoints=[];
+  for(let i=step;i<coords.length-1;i+=step)waypoints.push(coords[i][0]+','+coords[i][1]);
+  const origin=coords[0][0]+','+coords[0][1];
+  const dest=coords[coords.length-1][0]+','+coords[coords.length-1][1];
+  const wp=waypoints.join('|');
+  const url='https://www.google.com/maps/dir/?api=1&origin='+origin+'&destination='+dest+(wp?'&waypoints='+encodeURIComponent(wp):'')+'&travelmode=bicycling';
+  window.open(url,'_blank');
+}
+
+function shareRide(){
+  const coords=LS.get('last_ride_coords',[]);
+  const dist=document.getElementById('sum-dist').textContent;
+  const dur=document.getElementById('sum-dur').textContent;
+  const text='Just completed a '+dist+'km cycle ride in '+dur+' on Nutrivita Fit! 🚴💚';
+  if(navigator.share){navigator.share({title:'My Cycle Ride',text});}
+  else{navigator.clipboard.writeText(text).then(()=>alert('Copied to clipboard!'));}
+}
+
+function startT(){
+
+  document.getElementById('startb').style.display='none';
+  document.getElementById('lcard').style.display='block';
+  document.getElementById('lsname').textContent=SNAMES[sel]||'Activity';
+  ts=0;tdist=0;sessionElapsed=0;isTracking=true;detectedActivity=null;clearInterval(trk);
+  // GPS only for Run and Cycle; pedometer for all other activities
+  const useGPS=(sel==='run'||sel==='bike');
+  if(useGPS){
+    startCycleTracking();
+  } else {
+    document.getElementById('map-panel').style.display='none';
+  }
+  startPedometer();
+  trk=setInterval(()=>{
+    ts++;sessionElapsed=ts;
+    const m=String(Math.floor(ts/60)).padStart(2,'0'),s2=String(ts%60).padStart(2,'0');
+    document.getElementById('ltime').textContent=m+':'+s2;
+    document.getElementById('ldist').textContent=todayStats.distKm.toFixed(2);
+    // Use real PPG HR if available, else show last known or dash
+    const liveHR=ppgPeakTimes.length>=3?Math.round(ppgCalcBPM()):0;
+    const hrVal=liveHR>30&&liveHR<220?liveHR:(todayStats.lastHR||null);
+    document.getElementById('lhr').textContent=hrVal?hrVal:'--';
+    const shr=document.getElementById('stat-hr');if(shr&&hrVal)shr.innerHTML=hrVal+'<span class="mu">bpm</span>';
+    const shr2=shr?shr.nextElementSibling:null;if(shr2&&hrVal)shr2.textContent='live · during session';
+    document.getElementById('ibar').style.width=Math.min(100,Math.round(ts/1800*100))+'%';
+  },1000);
+}
+
+function stopT(){
+  clearInterval(trk);isTracking=false;
+  document.getElementById('lcard').style.display='none';
+  document.getElementById('startb').style.display='flex';
+  if(ts<5)return;
+  const name=detectedActivity||(SNAMES[sel]||'Activity');
+  const meta=AMETA[name]||AMETA['Exercise'];
+  const durationMins=Math.max(1,Math.round(ts/60));
+  const kcal=Math.round(meta.kpm*durationMins);
+  const now=new Date();
+  todayStats.kcal=Math.min(9999,todayStats.kcal+kcal);
+  todayStats.exMins=Math.min(999,todayStats.exMins+durationMins);
+  todayStats.standHrs=Math.min(12,parseFloat((todayStats.standHrs+durationMins/60).toFixed(1)));
+  saveTodayStats();
+  const newActivity={
+    icon:meta.icon,color:meta.color,bg:meta.bg,tag:meta.tag,
+    name,auto:!!detectedActivity,
+    time:'Today · '+now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
+    duration:durationMins,kcal,pts:0,date:todayKey()
+  };
+  activityLog.push(newActivity);
+  LS.set('activities',activityLog.slice(-50));
+  // Save activity via Netlify Function
+  if(userProfile&&window._sbReady){
+    try{
+      sbReq('activities','POST',{
+        id:'act_'+userProfile.name.replace(/[^a-zA-Z0-9]/g,'_')+'_'+Date.now(),
+        user_name:userProfile.name,
+        initials:userProfile.initials,
+        dept:userProfile.dept||'Employee',
+        name,duration:durationMins,kcal,
+        date:todayKey(),ts:Date.now()
+      });
+    }catch(e){}
+  }
+  if((sel==='run'||sel==='bike')&&rideCoords.length>=2){stopCycleTracking(durationMins,kcal);}
+  else{document.getElementById('map-panel').style.display='none';}
+  // Reset HR display after session
+  const shrEnd=document.getElementById('stat-hr');
+  if(shrEnd){shrEnd.innerHTML='—<span class="mu">bpm</span>';const ns2=shrEnd.nextElementSibling;if(ns2)ns2.textContent='session ended';}
+  refreshUI();
+}
+
+// ══════════════════════════════════════════════════════════════
+// WELLNESS LOGGING
+// ══════════════════════════════════════════════════════════════
+let wpts=todayStats.wellnessPts,wToday=todayStats.wellnessPtsToday;
+function logW(card,name,pts){
+  const bar=card.querySelector('.w-bar'),lbl=card.querySelector('.w-lbl');
+  if(bar&&bar.style.width==='100%')return;
+  if(bar)bar.style.width='100%';
+  if(lbl){lbl.style.color='var(--g1)';lbl.textContent=name+' logged today ✓ +'+pts+' pts';}
+  todayStats.wellnessPts+=pts;todayStats.wellnessPtsToday+=pts;
+  wpts=todayStats.wellnessPts;wToday=todayStats.wellnessPtsToday;
+  // persist which card was tapped
+  const key=card.getAttribute('data-wkey');
+  if(key){const logged=LS.get('wellness_logged_'+todayKey(),{});logged[key]=true;LS.set('wellness_logged_'+todayKey(),logged);}
+  saveTodayStats();refreshUI();
+}
+
+// ══════════════════════════════════════════════════════════════
+// LEADERBOARD
+// ══════════════════════════════════════════════════════════════
+const AVB=['rgba(255,215,0,.12)','rgba(96,165,250,.12)','rgba(29,185,84,.12)','rgba(167,139,250,.12)','rgba(245,158,11,.12)','rgba(248,113,113,.12)','rgba(74,222,171,.12)'];
+const AVC=['#FFD700','#60A5FA','#1DB954','#A78BFA','#F59E0B','#F87171','#4ADEAB'];
+const RC=['#FFD700','#C0C0C0','#CD7F32'];
+
+// ── SHARED LEADERBOARD — Netlify Functions + Supabase ────────
+async function pushMyScoreToCloud(){
+  if(!userProfile||!window._sbReady)return;
+  try{
+    const pts=todayStats.steps+todayStats.kcal*2+todayStats.wellnessPts*10;
+    const id=userProfile.name.replace(/[^a-zA-Z0-9]/g,'_')+'_'+userProfile.joinedAt;
+    await sbReq('leaderboard','POST',{
+      id,name:userProfile.name,initials:userProfile.initials,
+      dept:userProfile.dept||'Employee',
+      pts,steps:todayStats.steps,wellness:todayStats.wellnessPts,
+      updated_at:new Date().toISOString()
+    });
+  }catch(e){}
+}
+
+async function getAllUsersFromCloud(){
+  if(!window._sbReady)return getAllUsers();
+  try{
+    const rows=await sbReq('leaderboard','GET');
+    if(!Array.isArray(rows)||!rows.length)return getAllUsers();
+    const users=rows.map(r=>({
+      initials:r.initials,name:r.name,dept:r.dept,
+      pts:r.pts||0,steps:r.steps||0,wellness:r.wellness||0,
+      isYou:!!(userProfile&&userProfile.name===r.name)
+    }));
+    const others=users.filter(u=>!u.isYou);
+    LS.set('other_users',others);
+    return users;
+  }catch(e){return getAllUsers();}
+}
+
+function getAllUsers(){
+  // Sync version for immediate render using cached local data
+  const users=[];
+  if(userProfile){
+    const pts=todayStats.steps+todayStats.kcal*2+todayStats.wellnessPts*10;
+    users.push({initials:userProfile.initials,name:userProfile.name,dept:userProfile.dept||'Employee',pts,isYou:true,steps:todayStats.steps,wellness:todayStats.wellnessPts});
+  }
+  const others=LS.get('other_users',[]);
+  others.forEach(u=>users.push({...u,isYou:false}));
+  return users;
+}
+
+async function updateEmpCount(){
+  const cnt=document.getElementById('emp-count');if(!cnt)return;
+  if(!window._sbReady){
+    const local=(LS.get('other_users',[])).length+(userProfile?1:0);
+    cnt.textContent=local||'—';return;
+  }
+  try{
+    const rows=await sbReq('leaderboard','GET');
+    cnt.textContent=Array.isArray(rows)?rows.length:'—';
+  }catch(e){
+    const local=(LS.get('other_users',[])).length+(userProfile?1:0);
+    cnt.textContent=local||'—';
+  }
+}
+
+async function renderLBFromCloud(type){
+  currentLBType=type;
+  const list=document.getElementById('lb-list');if(!list)return;
+  list.innerHTML='<div style="text-align:center;padding:24px;color:var(--muted);font-size:12px">Loading scores…</div>';
+  const users=await getAllUsersFromCloud();
+  const others=users.filter(u=>!u.isYou);
+  LS.set('other_users',others);
+  renderLBWithUsers(users,type);
+  updateEmpCount();
+}
+
+function buildCombined(type,users){
+  if(!users)users=getAllUsers();
+  if(type==='dept'){
+    const deptMap={};
+    users.forEach(u=>{
+      const d=u.dept||'Employee';
+      if(!deptMap[d])deptMap[d]={dept:d,pts:0,count:0,initials:d.slice(0,3).toUpperCase()};
+      deptMap[d].pts+=u.pts;deptMap[d].count++;
+    });
+    return Object.values(deptMap).sort((a,b)=>b.pts-a.pts)
+      .map(d=>([d.initials,d.dept,d.count+' member'+(d.count!==1?'s':''),d.pts,false]));
+  }
+  return users.sort((a,b)=>{
+    if(type==='fitness')return b.steps-a.steps;
+    if(type==='wellness')return b.wellness-a.wellness;
+    return b.pts-a.pts;
+  }).map(u=>([u.initials,u.name,u.dept||'Employee',
+    type==='fitness'?u.steps:type==='wellness'?u.wellness:u.pts,u.isYou]));
+}
+
+function updatePodium(combined){
+  const slots=[{idx:1,col:'rgba(192,192,192'},{idx:0,col:'rgba(255,215,0'},{idx:2,col:'rgba(205,127,50'}];
+  const wrap=document.getElementById('podium-wrap');if(!wrap)return;
+  const divs=wrap.children;
+  slots.forEach(({idx,col},pos)=>{
+    const r=combined[idx];
+    const av=divs[pos].querySelector('.lbav');
+    const nm=divs[pos].querySelectorAll('div')[2];
+    const bar=divs[pos].querySelector('.pod-bar');
+    if(!av||!nm||!bar)return;
+    if(r){
+      av.textContent=r[0];av.style.background=col+',.15)';av.style.opacity='1';
+      nm.textContent=r[1].split(' ')[0]+' '+((r[1].split(' ')[1]||'')[0]||'')+'.';
+      nm.style.color='var(--text)';bar.textContent=Number(r[3]).toLocaleString();bar.style.opacity='1';
+    } else {
+      av.textContent='—';av.style.background=col+',.06)';av.style.opacity='0.4';
+      nm.textContent='—';nm.style.color='var(--muted)';bar.textContent='—';bar.style.opacity='0.3';
+    }
+  });
+}
+
+function renderLBWithUsers(users,type){
+  const t=type||currentLBType;
+  const list=document.getElementById('lb-list');if(!list)return;
+  list.innerHTML='';
+  const combined=buildCombined(t,users);
+  if(!combined.length){
+    list.innerHTML='<div style="text-align:center;padding:36px 16px;color:var(--muted);font-size:13px;line-height:1.8">No registered users yet.<br><span style="font-size:12px">Register above to appear here! 🌿</span></div>';
+    updatePodium([]);return;
+  }
+  updatePodium(combined);
+  combined.slice(0,50).forEach((r,i)=>{
+    const isYou=r[4]===true;
+    const div=document.createElement('div');div.className='lbi';
+    if(isYou)div.style.cssText='background:rgba(29,185,84,.05);border-radius:8px;padding:10px 4px;margin:2px -4px';
+    div.innerHTML=`<div class="lbr" style="color:${RC[i]||'var(--muted)'}">${i+1}</div><div class="lbav" style="background:${AVB[i%7]};color:${AVC[i%7]}">${r[0]}</div><div style="flex:1"><div style="font-size:13px;font-weight:600">${r[1]}${isYou?'<span class="tag tg" style="margin-left:4px">You</span>':''}</div><div style="font-size:10px;color:var(--muted)">${r[2]||''}</div></div><div class="lbpts">${Number(r[3]).toLocaleString()}</div>`;
+    list.appendChild(div);
+  });
+}
+
+let currentLBType='overall';
+function renderLB(type){
+  if(type)currentLBType=type;
+  window._currentLBType=currentLBType;
+  renderLBWithUsers(getAllUsers(),currentLBType);
+  renderLBFromCloud(currentLBType);
+}
+function showLB(type,el){
+  document.querySelectorAll('.lb-tab').forEach(t=>t.classList.remove('on'));
+  el.classList.add('on');renderLB(type);
+}
+
+renderLB('overall');
+
+// ── RESTORE SIGNUP CARD if already registered ─────────────────
+(function(){
+  if(!userProfile)return;
+  const card=document.getElementById('signup-card');if(!card)return;
+  card.style.cssText+='background:rgba(29,185,84,.07);border-color:rgba(29,185,84,.4)';
+  card.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><div class="jbadge"><div class="jdot"></div>Registered!</div></div><div style="font-size:15px;font-weight:700;margin-top:8px">${userProfile.name}</div><div style="font-size:12px;color:var(--muted);margin-top:2px">${userProfile.dept} · Welcome back 👋</div>`;
+})();
+
+function registerUser(){
+  const name=document.getElementById('reg-name').value.trim();
+  const dept=document.getElementById('reg-dept').value.trim();
+  if(!name){document.getElementById('reg-name').focus();return;}
+  const initials=name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)||'??';
+  userProfile={name,initials,dept:dept||'Employee',joinedAt:Date.now()};
+  window._currentUserName=name;
+  LS.set('profile',userProfile);
+  const card=document.getElementById('signup-card');
+  card.style.cssText+='background:rgba(29,185,84,.07);border-color:rgba(29,185,84,.4)';
+  card.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><div class="jbadge"><div class="jdot"></div>Registered!</div></div><div style="font-size:15px;font-weight:700;margin-top:8px">${name}</div><div style="font-size:12px;color:var(--muted);margin-top:2px">${dept||'Employee'} · Welcome to Nutrivita Fit 🎉</div>`;
+  const cnt=document.getElementById('emp-count');if(cnt)cnt.textContent='…';
+  refreshUI();renderLB(currentLBType);
+  pushMyScoreToCloud();
+  startPedometer();
+}
+
+// ── RESTORE WELLNESS CARD STATE ────────────────────────────
+(function(){
+  const logged = LS.get('wellness_logged_'+todayKey(), {});
+  document.querySelectorAll('.wcard[data-wkey]').forEach(card=>{
+    const key=card.getAttribute('data-wkey');
+    if(logged[key]){
+      const bar=card.querySelector('.w-bar'),lbl=card.querySelector('.w-lbl');
+      const nameMatch=card.getAttribute('onclick')||'';
+      const nm=nameMatch.match(/logW\(this,'([^']+)'/);
+      if(bar)bar.style.width='100%';
+      if(lbl){lbl.style.color='var(--g1)';lbl.textContent=(nm?nm[1]:'Activity')+' logged today ✓';}
+    }
+  });
+})();
+
+// Initial render + auto-start pedometer
+refreshUI();
+// ══════════════════════════════════════════════════════════════
+// MESSAGE BOARD
+// ══════════════════════════════════════════════════════════════
+function renderMessages(msgs){
+  const body=document.getElementById('msg-body');
+  const empty=document.getElementById('msg-empty');
+  const scroll=document.getElementById('msg-scroll');
+  if(!body)return;
+  if(!msgs||!msgs.length){
+    body.innerHTML='';
+    if(empty){empty.style.display='block';empty.textContent='No messages yet. Say hello! 👋';}
+    return;
+  }
+  if(empty)empty.style.display='none';
+  const wasAtBottom=scroll?(scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<60):true;
+  body.innerHTML='';
+  const myName=userProfile?userProfile.name:'';
+  msgs.forEach(m=>{
+    const isMe=m.userName===myName;
+    const time=m.ts?new Date(m.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+    const div=document.createElement('div');
+    div.style.cssText=`display:flex;flex-direction:column;align-items:${isMe?'flex-end':'flex-start'};margin-bottom:2px`;
+    div.innerHTML=`
+      ${!isMe?`<div style="font-size:10px;color:var(--muted);margin-bottom:2px;margin-left:4px">${m.initials||'?'} · ${m.userName||'User'}</div>`:''}
+      <div style="max-width:75%;padding:9px 13px;border-radius:${isMe?'14px 14px 4px 14px':'14px 14px 14px 4px'};background:${isMe?'var(--g1)':'var(--surf2)'};color:${isMe?'#fff':'var(--text)'};font-size:13px;line-height:1.45;word-break:break-word">${escHtml(m.text||'')}</div>
+      <div style="font-size:9px;color:var(--muted);margin-top:2px;margin-${isMe?'right':'left'}:4px">${time}</div>`;
+    body.appendChild(div);
+  });
+  if(wasAtBottom&&scroll)scroll.scrollTop=scroll.scrollHeight;
+  // Update online count
+  const oc=document.getElementById('msg-online-count');
+  const uniqueUsers=new Set(msgs.slice(-50).map(m=>m.userName)).size;
+  if(oc)oc.textContent=uniqueUsers+' active';
+}
+
+function escHtml(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function sendMessage(){
+  if(!userProfile){alert('Please register first to send messages.');return;}
+  const inp=document.getElementById('msg-input');
+  const text=(inp?inp.value:'').trim();
+  if(!text)return;
+  inp.value='';
+  if(!window._sbReady){alert('Not connected. Check internet connection.');return;}
+  try{
+    await sbReq('messages','POST',{
+      id:'msg_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+      user_name:userProfile.name,
+      initials:userProfile.initials,
+      text,ts:Date.now()
+    });
+    const rows=await sbReq('messages','GET');
+    if(Array.isArray(rows)){
+      window._liveMessages=rows.map(r=>({id:r.id,userName:r.user_name,initials:r.initials,text:r.text,ts:r.ts}));
+      renderMessages(window._liveMessages);
+    }
+  }catch(e){alert('Could not send message. Try again.');}
+}
+
+// Send on Enter (not Shift+Enter)
+document.addEventListener('DOMContentLoaded',()=>{
+  const mi=document.getElementById('msg-input');
+  if(mi)mi.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
+  });
+});
+
+// Load cached messages instantly if Supabase isn't ready yet
+(function(){
+  const cached=window._liveMessages;
+  if(cached&&cached.length)renderMessages(cached);
+})();
+if(todayStats.lastHR){
+  const hrEl=document.getElementById('stat-hr');
+  if(hrEl)hrEl.innerHTML=todayStats.lastHR+'<span class="mu">bpm</span>';
+  const sub=document.getElementById('stat-hr-sub');
+  if(sub)sub.textContent='last reading · tap to update';
+}
+
+
+// ── PWA INSTALL ─────────────────────────────────────────────
+let deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredPrompt=e;
+  document.getElementById('install-banner').classList.add('show');
+  const ic=document.getElementById('install-card');
+  if(ic)ic.style.display='block';
+});
+
+async function triggerInstall(){
+  if(!deferredPrompt)return;
+  deferredPrompt.prompt();
+  const{outcome}=await deferredPrompt.userChoice;
+  deferredPrompt=null;
+  document.getElementById('install-banner').classList.remove('show');
+  if(outcome==='accepted'){
+    const ic=document.getElementById('install-card');
+    if(ic)ic.style.display='none';
+  }
+}
+document.getElementById('install-btn').addEventListener('click',triggerInstall);
+const icb=document.getElementById('install-card-btn');
+if(icb)icb.addEventListener('click',triggerInstall);
+document.getElementById('install-close').addEventListener('click',()=>{
+  document.getElementById('install-banner').classList.remove('show');
+});
+
+window.addEventListener('appinstalled',()=>{
+  document.getElementById('install-banner').classList.remove('show');
+  const ic=document.getElementById('install-card');if(ic)ic.style.display='none';
+  console.log('[NutrivitaFit] App installed ✓');
+});
+
+// ── PUSH NOTIFICATIONS ──────────────────────────────────────
+function toggleNotifs(tog){
+  tog.classList.toggle('off');
+  if(!tog.classList.contains('off')){
+    if('Notification' in window){
+      Notification.requestPermission().then(p=>{
+        if(p!=='granted')tog.classList.add('off');
+      });
+    }
+  }
+}
+
+// ── OFFLINE DETECTION ───────────────────────────────────────
+function showOffline(){
+  const t=document.getElementById('offline-toast');
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),4000);
+}
+window.addEventListener('offline',showOffline);
+window.addEventListener('online',()=>{
+  const t=document.getElementById('offline-toast');
+  t.textContent='✅ Back online!';t.classList.add('show');
+  setTimeout(()=>{t.classList.remove('show');t.textContent='📵 You\'re offline — app works in cached mode';},2500);
+});
+
+// ── SERVICE WORKER ──────────────────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('sw.js')
+      .then(r=>console.log('[NutrivitaFit] SW registered, scope:',r.scope))
+      .catch(e=>console.warn('[NutrivitaFit] SW failed:',e));
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// PPG HEART RATE — Camera-based photoplethysmography
+// User places finger over rear camera + torch.
+// We sample the average red channel from each frame.
+// Peaks in the red signal correspond to heartbeats.
+// ══════════════════════════════════════════════════════════════
+let ppgStream=null,ppgAnimFrame=null,ppgCanvas=null,ppgCtx=null,ppgVideo=null;
+let ppgSamples=[],ppgPeakTimes=[],ppgRunning=false,ppgInterval=null;
+const PPG_DURATION=30; // seconds
+let ppgSecondsLeft=PPG_DURATION;
+
+function openPPG(){
+  const modal=document.getElementById('ppg-modal');
+  if(modal)modal.style.display='flex';
+  ppgReset();
+}
+
+function closePPG(){
+  ppgStop();
+  const modal=document.getElementById('ppg-modal');
+  if(modal)modal.style.display='none';
+}
+
+function ppgReset(){
+  ppgSamples=[];ppgPeakTimes=[];ppgSecondsLeft=PPG_DURATION;ppgRunning=false;
+  const btn=document.getElementById('ppg-btn');
+  if(btn){btn.textContent='Start Measuring';btn.disabled=false;btn.style.background='var(--g1)';}
+  document.getElementById('ppg-bpm').textContent='—';
+  const zl=document.getElementById('ppg-zone-label');if(zl){zl.textContent='—';zl.style.color='var(--muted)';}
+  document.getElementById('ppg-status').textContent='Place your fingertip firmly over the back camera lens';
+  document.getElementById('ppg-timer').textContent=PPG_DURATION+'s';
+  document.getElementById('ppg-bar').style.width='0%';
+  document.getElementById('ppg-bar').style.background='var(--g1)';
+  // clear canvas
+  const cv=document.getElementById('ppg-canvas');
+  if(cv){const cx=cv.getContext('2d');cx.clearRect(0,0,cv.width,cv.height);}
+}
+
+async function ppgStart(){
+  if(ppgRunning)return;
+  const btn=document.getElementById('ppg-btn');
+  btn.textContent='Starting camera…';btn.disabled=true;
+  document.getElementById('ppg-status').textContent='Opening camera…';
+
+  try{
+    // ── Step 1: open camera WITHOUT torch constraint first (Samsung fix)
+    // Torch in getUserMedia constraints causes silent failure on many Samsung devices.
+    // We apply torch AFTER stream is open via applyConstraints().
+    ppgStream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:320},height:{ideal:240},
+        frameRate:{ideal:30,min:15}
+      }
+    });
+
+    // ── Step 2: try to enable torch separately (won't break if unavailable)
+    try{
+      const vTrack=ppgStream.getVideoTracks()[0];
+      if(vTrack){
+        const caps=vTrack.getCapabilities?vTrack.getCapabilities():{};
+        if(caps.torch){
+          await vTrack.applyConstraints({advanced:[{torch:true}]});
+          document.getElementById('ppg-status').textContent='🔦 Torch ON · Place finger over camera';
+        } else {
+          document.getElementById('ppg-status').textContent='No torch · Use bright light · Place finger over camera';
+        }
+      }
+    }catch(torchErr){ /* torch unavailable — continue anyway */ }
+
+    ppgVideo=document.getElementById('ppg-video');
+    ppgVideo.srcObject=ppgStream;
+
+    // ── Step 3: wait for video metadata so videoWidth/Height are valid (Android fix)
+    await new Promise((resolve,reject)=>{
+      ppgVideo.onloadedmetadata=resolve;
+      ppgVideo.onerror=reject;
+      setTimeout(resolve,3000); // fallback timeout
+    });
+    await ppgVideo.play();
+
+    // Extra wait for first frames to arrive on slow Android cameras
+    await new Promise(r=>setTimeout(r,600));
+
+    ppgCanvas=document.getElementById('ppg-canvas');
+    // Use alpha:false for faster getImageData on Android
+    ppgCtx=ppgCanvas.getContext('2d',{willReadFrequently:true,alpha:false});
+    // Use actual video dimensions, fall back gracefully
+    ppgCanvas.width=ppgVideo.videoWidth||320;
+    ppgCanvas.height=ppgVideo.videoHeight||240;
+
+    ppgSamples=[];ppgPeakTimes=[];ppgRunning=true;
+    ppgSecondsLeft=PPG_DURATION;
+    ppgLastSampleTime=0;
+
+    document.getElementById('ppg-status').textContent='Keep finger still and pressed firmly 🤫';
+    btn.textContent='Measuring…';
+
+    // Countdown timer
+    ppgInterval=setInterval(()=>{
+      ppgSecondsLeft--;
+      document.getElementById('ppg-timer').textContent=ppgSecondsLeft+'s';
+      document.getElementById('ppg-bar').style.width=((PPG_DURATION-ppgSecondsLeft)/PPG_DURATION*100)+'%';
+      if(ppgSecondsLeft<=0){ppgFinish();}
+    },1000);
+
+    ppgSampleLoop();
+
+  }catch(err){
+    let msg='Camera error: '+err.message;
+    if(err.name==='NotAllowedError')msg='Camera permission denied. Go to browser Settings → Site Settings → Camera and allow.';
+    else if(err.name==='NotFoundError')msg='No camera found on this device.';
+    else if(err.name==='NotReadableError')msg='Camera in use by another app. Close other apps and try again.';
+    document.getElementById('ppg-status').textContent=msg;
+    btn.textContent='Start Measuring';btn.disabled=false;btn.style.background='var(--g1)';
+  }
+}
+
+// Throttle sampling to ~30fps using timestamps (fixes irregular rAF on Android)
+let ppgLastSampleTime=0;
+const PPG_SAMPLE_INTERVAL=33; // ms (~30fps)
+
+function ppgSampleLoop(ts){
+  if(!ppgRunning)return;
+
+  // Throttle: only sample every ~33ms regardless of rAF timing
+  if(ts&&ts-ppgLastSampleTime<PPG_SAMPLE_INTERVAL){
+    ppgAnimFrame=requestAnimationFrame(ppgSampleLoop);
+    return;
+  }
+  ppgLastSampleTime=ts||performance.now();
+
+  // Guard: video must be playing and have real dimensions
+  if(!ppgVideo||ppgVideo.readyState<2||ppgCanvas.width===0){
+    ppgAnimFrame=requestAnimationFrame(ppgSampleLoop);
+    return;
+  }
+
+  try{
+    ppgCtx.drawImage(ppgVideo,0,0,ppgCanvas.width,ppgCanvas.height);
+    const data=ppgCtx.getImageData(0,0,ppgCanvas.width,ppgCanvas.height).data;
+
+    // Sample centre region only (60% of frame) — avoids dark edges that dilute signal
+    const cw=Math.floor(ppgCanvas.width*0.6),ch=Math.floor(ppgCanvas.height*0.6);
+    const ox=Math.floor((ppgCanvas.width-cw)/2),oy=Math.floor((ppgCanvas.height-ch)/2);
+    let redSum=0,count=0;
+    for(let y=oy;y<oy+ch;y++){
+      for(let x=ox;x<ox+cw;x++){
+        const idx=(y*ppgCanvas.width+x)*4;
+        redSum+=data[idx];count++;
+      }
+    }
+    const avgRed=count>0?redSum/count:0;
+
+    // Only record if signal looks like a covered camera (red channel > 100)
+    // An uncovered camera gives low red values; covered finger gives high (180–250)
+    if(avgRed<80){
+      document.getElementById('ppg-status').textContent='⚠️ Cover the camera fully with your fingertip';
+      ppgAnimFrame=requestAnimationFrame(ppgSampleLoop);
+      return;
+    } else if(ppgRunning){
+      document.getElementById('ppg-status').textContent='Keep finger still and pressed firmly 🤫';
+    }
+
+    ppgSamples.push({t:Date.now(),v:avgRed});
+    if(ppgSamples.length>600)ppgSamples.shift();
+
+    ppgDrawWave();
+    ppgDetectPeaks();
+
+    if(ppgPeakTimes.length>=3){
+      const bpm=ppgCalcBPM();
+      if(bpm>30&&bpm<220){
+        document.getElementById('ppg-bpm').textContent=Math.round(bpm);
+        const c=bpm<60?'var(--blue)':bpm<100?'var(--g1)':bpm<140?'var(--warn)':'var(--danger)';
+        document.getElementById('ppg-bpm').style.color=c;
+        const zone=bpm<60?'Resting ❄️':bpm<100?'Normal ✅':bpm<140?'Elevated ⚡':'High 🔥';
+        const zl=document.getElementById('ppg-zone-label');
+        if(zl){zl.textContent=zone;zl.style.color=c;}
+      }
+    } else if(ppgSamples.length>30){
+      // Show detecting state so user knows it's working
+      const zl=document.getElementById('ppg-zone-label');
+      if(zl)zl.textContent='Detecting pulse…';
+    }
+  }catch(e){ /* frame decode error — skip */ }
+
+  ppgAnimFrame=requestAnimationFrame(ppgSampleLoop);
+}
+
+function ppgDrawWave(){
+  if(!ppgCtx||ppgSamples.length<2)return;
+  const cv=document.getElementById('ppg-wave');if(!cv)return;
+  const cx=cv.getContext('2d');
+  cx.clearRect(0,0,cv.width,cv.height);
+  const W=cv.width,H=cv.height;
+  const pts=ppgSamples.slice(-W);
+  if(pts.length<2)return;
+  const vals=pts.map(p=>p.v);
+  const mn=Math.min(...vals),mx=Math.max(...vals),range=mx-mn||1;
+  cx.beginPath();
+  cx.strokeStyle='#F87171';cx.lineWidth=2;cx.lineJoin='round';
+  pts.forEach((p,i)=>{
+    const x=i*(W/pts.length);
+    const y=H-((p.v-mn)/range)*(H-8)-4;
+    i===0?cx.moveTo(x,y):cx.lineTo(x,y);
+  });
+  cx.stroke();
+}
+
+let ppgLastPeak=0;
+function ppgDetectPeaks(){
+  const N=ppgSamples.length;if(N<20)return;
+
+  // Use a wider window for baseline (Samsung auto-exposure compresses variance)
+  const win=ppgSamples.slice(-30);
+  const vals=win.map(w=>w.v);
+  const avg=vals.reduce((a,b)=>a+b,0)/vals.length;
+
+  // Standard deviation — used for adaptive threshold
+  const std=Math.sqrt(vals.reduce((a,b)=>a+(b-avg)**2,0)/vals.length);
+
+  // Require peak to be at least 0.3 std above average (adaptive, not fixed %)
+  // This handles Samsung's low-variance compressed signal correctly
+  const threshold=avg+(std*0.3||0.5);
+
+  const prev2=ppgSamples[N-6];
+  const prev =ppgSamples[N-5];
+  const cur  =ppgSamples[N-4];
+  if(!prev||!prev2||!cur)return;
+
+  const isPeak=prev.v>cur.v&&prev.v>prev2.v&&prev.v>threshold;
+  if(isPeak&&prev.t-ppgLastPeak>333){ // min 333ms = 180bpm max
+    ppgLastPeak=prev.t;
+    ppgPeakTimes.push(prev.t);
+    if(ppgPeakTimes.length>25)ppgPeakTimes.shift();
+    // Animate heart on each detected beat
+    const h=document.getElementById('ppg-heart');
+    if(h){h.classList.remove('ppg-pulse');void h.offsetWidth;h.classList.add('ppg-pulse');}
+  }
+}
+
+function ppgCalcBPM(){
+  if(ppgPeakTimes.length<2)return 0;
+  // Use last 8 inter-beat intervals for rolling average
+  const recent=ppgPeakTimes.slice(-9);
+  const intervals=[];
+  for(let i=1;i<recent.length;i++)intervals.push(recent[i]-recent[i-1]);
+  // Filter physiologically plausible intervals (273ms–2000ms = 30–220bpm)
+  const valid=intervals.filter(iv=>iv>273&&iv<2000);
+  if(!valid.length)return 0;
+  const avgIv=valid.reduce((a,b)=>a+b,0)/valid.length;
+  return 60000/avgIv;
+}
+
+function ppgFinish(){
+  clearInterval(ppgInterval);
+  cancelAnimationFrame(ppgAnimFrame);
+  ppgRunning=false;
+  ppgStop();
+
+  const bpm=ppgPeakTimes.length>=3?Math.round(ppgCalcBPM()):0;
+  const btn=document.getElementById('ppg-btn');
+
+  if(bpm>30&&bpm<220){
+    document.getElementById('ppg-bpm').textContent=bpm;
+    const zone=bpm<60?'Resting':bpm<100?'Normal':bpm<140?'Elevated':'High';
+    const c=bpm<60?'var(--blue)':bpm<100?'var(--g1)':bpm<140?'var(--warn)':'var(--danger)';
+    document.getElementById('ppg-bpm').style.color=c;
+    document.getElementById('ppg-status').textContent='✅ Measurement complete — '+zone+' zone';
+    document.getElementById('ppg-bar').style.width='100%';
+    document.getElementById('ppg-bar').style.background=c;
+    // Save to home screen
+    const hrEl=document.getElementById('stat-hr');
+    if(hrEl)hrEl.innerHTML=bpm+'<span class="mu">bpm</span>';
+    const sub=document.getElementById('stat-hr-sub');
+    if(sub)sub.textContent=zone.toLowerCase()+' · just now';
+    // Save to stats
+    todayStats.lastHR=bpm;saveTodayStats();
+    btn.textContent='Measure Again';btn.disabled=false;btn.style.background='var(--blue)';
+    btn.onclick=()=>{ppgReset();ppgStart();};
+  }else{
+    document.getElementById('ppg-status').textContent='Could not get a clear reading. Ensure finger covers lens fully and hold still.';
+    btn.textContent='Try Again';btn.disabled=false;btn.style.background='var(--warn)';
+    btn.onclick=()=>{ppgReset();ppgStart();};
+  }
+}
+
+function ppgStop(){
+  ppgRunning=false;
+  cancelAnimationFrame(ppgAnimFrame);
+  clearInterval(ppgInterval);
+  if(ppgStream){
+    ppgStream.getTracks().forEach(t=>{
+      try{
+        // Turn off torch before stopping track (Samsung requirement)
+        const caps=t.getCapabilities?t.getCapabilities():{};
+        if(caps.torch)t.applyConstraints({advanced:[{torch:false}]}).catch(()=>{});
+      }catch(e){}
+      t.stop();
+    });
+    ppgStream=null;
+  }
+  if(ppgVideo){ppgVideo.srcObject=null;}
+}
+</script>
+
+<!-- ══════════ PPG HEART RATE MODAL ══════════ -->
+<div id="ppg-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);align-items:flex-end;justify-content:center">
+  <div style="background:var(--bg);border-radius:22px 22px 0 0;width:100%;max-width:480px;padding:20px 20px calc(28px + var(--safe-bot))">
+    <!-- Header -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <div style="font-size:16px;font-weight:800">❤️ Heart Rate</div>
+        <div style="font-size:11px;color:var(--muted)">Camera PPG · place finger over lens</div>
+      </div>
+      <button onclick="closePPG()" style="background:var(--surf2);border:none;border-radius:50%;width:32px;height:32px;font-size:16px;cursor:pointer;color:var(--text)">✕</button>
+    </div>
+
+    <!-- BPM display -->
+    <div style="text-align:center;margin-bottom:14px;background:var(--surf2);border-radius:16px;padding:16px 12px;position:relative">
+      <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);margin-bottom:4px">HEART RATE</div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        <div id="ppg-heart" style="font-size:28px;line-height:1">❤️</div>
+        <div style="display:flex;align-items:baseline;gap:6px">
+          <div id="ppg-bpm" style="font-size:72px;font-weight:900;color:var(--danger);line-height:1;font-family:'Syne',sans-serif;min-width:120px;text-align:right">—</div>
+          <div style="font-size:14px;font-weight:600;color:var(--muted);padding-bottom:8px">bpm</div>
+        </div>
+      </div>
+      <div id="ppg-zone-label" style="font-size:12px;font-weight:600;color:var(--muted);margin-top:4px">—</div>
+    </div>
+
+    <!-- Waveform canvas -->
+    <div style="background:var(--surf2);border-radius:12px;overflow:hidden;margin-bottom:12px;height:60px;position:relative">
+      <canvas id="ppg-wave" width="380" height="60" style="width:100%;height:60px"></canvas>
+      <div style="position:absolute;top:6px;left:10px;font-size:9px;color:var(--muted);font-weight:600">PULSE WAVE</div>
+    </div>
+
+    <!-- Progress bar -->
+    <div style="background:var(--surf2);border-radius:4px;height:6px;margin-bottom:8px;overflow:hidden">
+      <div id="ppg-bar" style="height:100%;width:0%;background:var(--g1);border-radius:4px;transition:width 1s linear"></div>
+    </div>
+
+    <!-- Timer + status -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div id="ppg-status" style="font-size:11px;color:var(--muted);flex:1;line-height:1.4">Place your fingertip firmly over the back camera lens</div>
+      <div id="ppg-timer" style="font-size:13px;font-weight:700;color:var(--text);margin-left:10px;flex-shrink:0">30s</div>
+    </div>
+
+    <!-- Instructions -->
+    <div style="background:rgba(29,185,84,.08);border:1px solid rgba(29,185,84,.2);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:11px;color:var(--muted);line-height:1.7">
+      <b style="color:var(--text)">How to measure:</b><br>
+      1. Hold phone face-up<br>
+      2. Gently press your <b>index fingertip</b> over the <b>rear camera</b><br>
+      3. Keep still for 30 seconds<br>
+      4. Torch will activate automatically (if available)
+    </div>
+
+    <!-- Hidden video element -->
+    <video id="ppg-video" autoplay muted playsinline style="display:none;width:0;height:0"></video>
+    <canvas id="ppg-canvas" style="display:none"></canvas>
+
+    <!-- Action button -->
+    <button id="ppg-btn" onclick="ppgStart()" style="width:100%;padding:14px;border-radius:13px;border:none;background:var(--g1);color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:'Syne',sans-serif">
+      Start Measuring
+    </button>
+
+    <!-- HR zones legend -->
+    <div style="display:flex;gap:6px;margin-top:12px;justify-content:center;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--blue)">● Resting &lt;60</span>
+      <span style="font-size:10px;color:var(--g1)">● Normal 60–99</span>
+      <span style="font-size:10px;color:var(--warn)">● Elevated 100–139</span>
+      <span style="font-size:10px;color:var(--danger)">● High 140+</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
