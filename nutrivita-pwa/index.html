@@ -16,7 +16,7 @@
   <script>
     // Call Netlify Functions (backend handles Supabase securely)
     async function sbReq(endpoint, method = 'GET', body = null) {
-      const url = `/.netlify/functions/${endpoint}`;
+      const url = `/api/${endpoint}`;
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
